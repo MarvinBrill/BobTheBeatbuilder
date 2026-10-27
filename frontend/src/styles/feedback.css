@@ -1,0 +1,129 @@
+.toast {
+  position: fixed;
+  bottom: 25px;
+  right: 25px;
+  max-width: 560px;
+  background: #382331f5;
+  border: 1px solid #c97b9260;
+  border-radius: 12px;
+  box-shadow: 0 10px 45px #0007;
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  z-index: 30;
+  backdrop-filter: blur(20px);
+}
+.toast b {
+  font-size: 14px;
+  color: #edb6c6;
+}
+.toast p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin-top: 8px;
+  color: #c4a5b7;
+  overflow-wrap: anywhere;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: #08060cbb;
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.help-modal {
+  max-width: 610px;
+  background: #211b2b;
+}
+.help-modal ol {
+  padding-left: 20px;
+  color: #bda9c9;
+  font-size: 15px;
+  line-height: 2.2;
+}
+.help-modal li {
+  padding: 7px 0;
+}
+.help-modal .muted {
+  margin-bottom: 0;
+}
+
+.delete-dialog {
+  margin: auto;
+  width: min(540px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 28px;
+  border: 1px solid #d49bbf55;
+  border-radius: 18px;
+  background: #211b2bf5;
+  color: #eeebf4;
+  box-shadow: 0 24px 80px #0008;
+}
+.delete-dialog::backdrop {
+  background: #08060cbb;
+  backdrop-filter: blur(8px);
+}
+.delete-dialog p {
+  margin-top: 14px;
+  color: #bbb0ca;
+  line-height: 1.6;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.delete-dialog .delete-name {
+  color: #f3bad6;
+  font-weight: 600;
+}
+.delete-dialog .delete-error {
+  color: #ffb6bb;
+}
+.dialog-actions,
+.artifact-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dialog-actions {
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+.artifact-actions {
+  flex-shrink: 0;
+}
+.icon-button.delete-button {
+  color: #e8a2af;
+}
+.icon-button.delete-button:hover:not(:disabled) {
+  background: #a73e5338;
+}
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #8e354b;
+  border: 1px solid #d3758c;
+  border-radius: 8px;
+  padding: 11px 16px;
+  color: #fff0f4;
+  font-size: 14px;
+}
+.danger-button:hover:not(:disabled) {
+  background: #a03d55;
+}
+.model-footer {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.output-row {
+  gap: 12px;
+}
+.output-row > .text-button {
+  min-width: 0;
+  text-align: left;
+}

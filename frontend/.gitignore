@@ -1,0 +1,12 @@
+# Installed packages (normally linked to ../data/frontend-runtime).
+node_modules/
+
+# Generated bundles, incremental compiler state and test reports.
+dist/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+
+# Machine-specific Vite overrides.
+*.local

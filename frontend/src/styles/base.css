@@ -1,0 +1,140 @@
+:root {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  color: #eeebf4;
+  background: #101019;
+  font-synthesis: none;
+  font-weight: 400;
+  font-size: 16px;
+  --pink: #f6a0c8;
+  --muted: #9691a6;
+  --border: rgba(204, 191, 231, 0.11);
+  --panel: rgba(30, 28, 44, 0.72);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+a,
+input,
+select,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+a {
+  transition:
+    background 0.18s,
+    border-color 0.18s,
+    transform 0.18s;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: 4px;
+}
+input:focus,
+select:focus {
+  outline: 1px solid #c896c8;
+  border-color: #bf88b2;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+h3 {
+  font-weight: 550;
+}
+button svg,
+a svg {
+  flex-shrink: 0;
+}
+button {
+  border: 0;
+  color: inherit;
+}
+input[type="checkbox"] {
+  accent-color: #efa4d0;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  flex-shrink: 0;
+}
+input[type="range"] {
+  accent-color: #e4a1c7;
+  width: 100%;
+  padding: 0;
+  height: 4px;
+  cursor: pointer;
+}
+input,
+select {
+  min-width: 0;
+  width: 100%;
+  color: #e7e3ed;
+  background: #15141f;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 12px;
+}
+select {
+  color-scheme: dark;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #b8b2c5;
+  font-size: 14px;
+  font-weight: 500;
+}
+label + label {
+  margin-top: 17px;
+}
+small {
+  font-size: 13px;
+  color: var(--muted);
+}
+code {
+  color: #dbb1d4;
+}
+progress {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border: 0;
+  border-radius: 5px;
+  background: #30283c;
+}
+progress::-webkit-progress-bar {
+  background: #30283c;
+}
+progress::-webkit-progress-value {
+  background: #e7a1c7;
+}

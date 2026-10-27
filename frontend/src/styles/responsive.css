@@ -1,0 +1,216 @@
+@media (min-width: 1600px) {
+  :root main {
+    padding-top: 50px;
+  }
+  :root .playfield {
+    max-height: 510px;
+    aspect-ratio: auto;
+    height: 510px;
+  }
+}
+@media (max-width: 1200px) {
+  :root .sidebar {
+    width: 195px;
+    padding-inline: 13px;
+  }
+  :root .main-shell {
+    margin-left: 195px;
+    width: calc(100% - 195px);
+  }
+  :root main {
+    padding: 30px 25px 20px;
+  }
+  :root .topbar {
+    padding: 0 25px;
+  }
+  :root h1 {
+    font-size: 32px;
+  }
+  :root .studio-grid {
+    grid-template-columns: minmax(295px, 1fr) minmax(300px, 1.1fr);
+    gap: 18px;
+  }
+  :root .panel {
+    padding: 19px;
+  }
+  :root .preview-panel {
+    padding: 0;
+  }
+  :root .page-heading > .pill {
+    display: none;
+  }
+  :root .onboarding {
+    flex-wrap: wrap;
+  }
+  :root .onboarding > .text-button {
+    margin-left: 50px;
+  }
+  :root .dataset-action {
+    flex-wrap: wrap;
+  }
+  :root .dataset-action label {
+    flex-basis: 100%;
+  }
+  :root .training-grid {
+    grid-template-columns: 1fr 1.2fr;
+  }
+}
+@media (max-width: 980px) {
+  :root .sidebar {
+    width: 76px;
+    padding-inline: 12px;
+  }
+  :root .brand {
+    padding: 0;
+    justify-content: center;
+    margin-bottom: 34px;
+  }
+  :root .brand > div:last-child,
+  :root .workspace-label,
+  :root nav button > i,
+  :root .sidebar-bottom {
+    display: none;
+  }
+  :root nav button {
+    font-size: 0;
+    justify-content: center;
+    padding: 15px 0;
+    gap: 0;
+  }
+  :root nav button svg {
+    width: 21px;
+    height: 21px;
+  }
+  :root .main-shell {
+    margin-left: 76px;
+    width: calc(100% - 76px);
+  }
+  :root .library-import-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  :root .input-action {
+    flex-direction: column;
+  }
+  :root .training-grid {
+    grid-template-columns: 1fr;
+  }
+  :root .model-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 740px) {
+  :root .sidebar {
+    position: sticky;
+    top: 0;
+    flex-direction: row;
+    width: 100%;
+    height: 65px;
+    padding: 10px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  :root .brand {
+    margin: 0 20px 0 0;
+  }
+  :root .brand-mark {
+    width: 35px;
+    height: 35px;
+    font-size: 30px;
+    border-radius: 10px;
+  }
+  :root .brand .brand-mark span {
+    font-size: 19px;
+    top: 3px;
+  }
+  :root nav {
+    flex-direction: row;
+    flex: 1;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+  :root nav button {
+    padding: 10px 13px;
+  }
+  :root .app-shell {
+    display: block;
+  }
+  :root .main-shell {
+    margin: 0;
+    width: 100%;
+  }
+  :root .topbar {
+    height: 50px;
+    padding: 0 20px;
+  }
+  :root .topbar-status {
+    max-width: 160px;
+    font-size: 12px;
+  }
+  :root main {
+    padding: 27px 18px 18px;
+  }
+  :root h1 {
+    font-size: 31px;
+  }
+  :root .page-heading {
+    margin-bottom: 23px;
+  }
+  :root .page-heading p {
+    font-size: 13px;
+  }
+  :root .studio-grid,
+  :root .library-import-grid {
+    grid-template-columns: 1fr;
+  }
+  :root .onboarding {
+    padding: 15px;
+    gap: 12px;
+  }
+  :root .onboarding > div:nth-child(2) {
+    flex: 1;
+  }
+  :root .onboarding > .text-button {
+    margin-left: 46px;
+  }
+  :root .playfield {
+    aspect-ratio: 4/3;
+  }
+  :root .table-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  :root .search-input {
+    width: 100%;
+  }
+  :root .selection-bar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  :root .dataset-action > .primary,
+  :root .dataset-action > .secondary {
+    width: 100%;
+  }
+  :root footer {
+    gap: 15px;
+    font-size: 12px;
+  }
+  :root .toast {
+    left: 15px;
+    right: 15px;
+    bottom: 15px;
+  }
+  :root .page-heading > .primary {
+    font-size: 12px;
+    padding: 10px;
+  }
+  :root .workflow-strip {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

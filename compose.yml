@@ -1,0 +1,17 @@
+name: bob-beatbuilder-cpu
+services:
+  bob:
+    build:
+      context: .
+      args:
+        COMPUTE: cpu
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ./data:/app/data
+      - type: bind
+        source: ${OSU_PATH:-D:/osu! lazer}
+        target: /osu
+        read_only: true
+        bind:
+          create_host_path: false
+    init: true

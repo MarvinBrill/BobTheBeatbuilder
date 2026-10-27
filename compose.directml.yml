@@ -1,0 +1,46 @@
+# Experimental WSL2 GPU pass-through. Run with a Docker Engine that can see
+# /dev/dxg and /usr/lib/wsl on its daemon host. Not ordinary Windows containers.
+# For Docker Desktop hosts lacking these paths use scripts/start.ps1 -Device directml.
+name: bob-beatbuilder-directml
+services:
+  bob:
+    build:
+      context: .
+      args:
+        COMPUTE: directml
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      BOB_DEVICE: directml
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib
+    devices:
+      - /dev/dxg:/dev/dxg
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+      - type: bind
+        source: ${OSU_PATH:-/mnt/d/osu! lazer}
+        target: /osu
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /usr/lib/wsl/lib
+        target: /usr/lib/wsl/lib
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /usr/lib/wsl/drivers
+        target: /usr/lib/wsl/drivers
+        read_only: true
+        bind:
+          create_host_path: false
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=5)"]
+      start_period: 90s
+      interval: 30s
+      timeout: 10s
+      retries: 3

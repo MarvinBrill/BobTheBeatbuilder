@@ -1,0 +1,84 @@
+import json
+import zipfile
+from dataclasses import asdict
+from pathlib import Path
+import numpy as np
+import torch
+from safetensors.torch import load_file
+from .. import store
+from ..beatmaps import write, parse
+from ..artifacts import artifact_directory
+from ..config import DATA
+from .audio import features, export_audio, FRAME_MS
+from .network import conditions, device
+from .phrase_model import create_model
+from .sequence_generation import generate_objects
+from .architecture import EVENT_SCHEMA
+
+
+def generate(settings, context):
+    settings = {"seed": 42, "temperature": 0.8, "candidates": 12, **settings}
+    selected_device = device(settings["device"])
+    metadata = store.get("model", settings["model_id"])
+    if metadata.get("event_schema") != EVENT_SCHEMA:
+        raise ValueError("Obsolete model event schema. Train a new Phrase Mapper model.")
+    model = create_model(metadata["architecture"], metadata.get("model_config"))
+    if metadata.get("trained_slider_geometry") == 0:
+        settings = {**settings, "slider_bias": 0}
+    audio_path = Path(store.get("audio", settings["audio_id"])["path"])
+    context.report(0.02, "Audio analysieren")
+    mel = features(audio_path)
+    model.load_state_dict(load_file(str(DATA / "models" / metadata["id"] / "model.safetensors")))
+    model.to(selected_device).eval()
+    condition = torch.tensor([conditions(settings)], dtype=torch.float32, device=selected_device)
+    objects, timing, report = generate_objects(
+        model, mel, audio_path, settings, condition, selected_device, context
+    )
+    with artifact_directory("outputs") as (identifier, directory):
+        audio_name = "audio.ogg"
+        export_audio(audio_path, directory / audio_name)
+        bpm, offset = 60000 / timing[0][1], timing[0][0]
+        write(directory / "map.osu", objects, settings, audio_name, bpm, offset, timing)
+        verified = parse(directory / "map.osu")
+        if len(verified.objects) != len(objects):
+            raise ValueError("Generated beatmap validation failed")
+        for index, (actual, expected) in enumerate(zip(verified.objects, objects)):
+            if abs(actual.duration - expected.duration) > 2:
+                raise ValueError("Slider timing changed during export")
+            if (
+                index + 1 < len(verified.objects)
+                and actual.time + actual.duration >= verified.objects[index + 1].time
+            ):
+                raise ValueError("Generated objects overlap in time")
+        with zipfile.ZipFile(directory / "beatmap.osz", "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(directory / "map.osu", "map.osu")
+            archive.write(directory / audio_name, audio_name)
+        preview = {
+            "objects": [asdict(obj) for obj in objects],
+            "duration": len(mel) * FRAME_MS / 1000,
+            "bpm": bpm,
+            "offset": offset,
+            "timing": timing,
+            "quality": report,
+            "cs": settings["cs"],
+            "ar": settings["ar"],
+            "waveform": np.max(mel[:: max(1, len(mel) // 180)], axis=1).tolist(),
+        }
+        (directory / "preview.json").write_text(json.dumps(preview, allow_nan=False), encoding="utf-8")
+        context.check()
+        store.save(
+            "output",
+            {
+                "id": identifier,
+                "name": f"{settings['title']}.osz",
+                "path": str(directory / "beatmap.osz"),
+                "audio_path": str(directory / audio_name),
+                "preview_path": str(directory / "preview.json"),
+                "objects": len(objects),
+                "bpm": round(bpm, 2),
+                "quality": report,
+                "settings": settings,
+                "created_at": store.now(),
+            },
+        )
+        return {"output_id": identifier}

@@ -1,0 +1,30 @@
+name: bob-beatbuilder-cuda
+services:
+  bob:
+    build:
+      context: .
+      args:
+        COMPUTE: cuda
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      BOB_DEVICE: cuda
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+      - type: bind
+        source: ${OSU_PATH:-D:/osu! lazer}
+        target: /osu
+        read_only: true
+        bind:
+          create_host_path: false
+    gpus: all
+    shm_size: 1gb
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/state', timeout=5)"]
+      interval: 30s
+      start_period: 90s
+      timeout: 10s
+      retries: 3

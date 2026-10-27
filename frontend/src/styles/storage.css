@@ -1,0 +1,70 @@
+.storage-summary {
+  margin-bottom: 24px;
+}
+.storage-summary > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.storage-summary strong {
+  font-size: 28px;
+  color: #efb4d8;
+}
+.storage-summary p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+.storage-cache-setting {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  margin: 22px 0 12px;
+}
+.storage-cache-setting label {
+  margin: 0;
+  max-width: 240px;
+}
+.storage-group {
+  margin-bottom: 22px;
+}
+.storage-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 17px 0;
+  border-top: 1px solid var(--border);
+}
+.storage-row > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.storage-row p {
+  margin: 6px 0;
+  color: #b5a9c2;
+  line-height: 1.6;
+}
+.storage-row small {
+  color: #92859f;
+}
+.storage-size {
+  white-space: nowrap;
+  color: #e4bbd8;
+}
+.storage-paths ul {
+  max-height: 160px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding-left: 20px;
+}
+@media (max-width: 600px) {
+  .storage-row {
+    flex-wrap: wrap;
+  }
+  .storage-row > div {
+    flex-basis: 100%;
+  }
+  .storage-cache-setting {
+    flex-wrap: wrap;
+  }
+}
