@@ -4,7 +4,7 @@ import torch
 from safetensors.torch import save_file, load_file
 from ..config import DATA
 from .. import store
-from .architecture import ARCHITECTURE
+from .architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA
 
 
 def save_weights(model, path):
@@ -17,7 +17,10 @@ def save_weights(model, path):
 
 
 def save_training(model, optimizer, directory, state):
-    tensors = {f"model.{key}": value.detach().cpu().contiguous() for key, value in model.state_dict().items()}
+    tensors = {
+        f"model.{key}": value.detach().cpu().contiguous()
+        for key, value in model.state_dict().items()
+    }
     for index, parameter in enumerate(model.parameters()):
         for key, value in optimizer.state.get(parameter, {}).items():
             if torch.is_tensor(value):
@@ -26,7 +29,17 @@ def save_training(model, optimizer, directory, state):
         raise ValueError("Non-finite training checkpoint refused")
     temporary = directory / "training.tmp"
     # State and tensors are a single atomic file; no pickle is ever loaded.
-    save_file(tensors, str(temporary), metadata={"state": json.dumps(state)})
+    save_file(
+        tensors,
+        str(temporary),
+        metadata={
+            "state": json.dumps(state),
+            "architecture": ARCHITECTURE,
+            "event_schema": EVENT_SCHEMA,
+            "target_schema": TARGET_SCHEMA,
+            "format_version": str(FORMAT_VERSION),
+        },
+    )
     temporary.replace(directory / "training.safetensors")
 
 
@@ -35,14 +48,27 @@ def restore(model, optimizer, identifier, dataset_id):
 
     metadata = store.get("model", identifier)
     if metadata["architecture"] != ARCHITECTURE or metadata.get("dataset_id") != dataset_id:
-        raise ValueError("Continue training requires the same dataset and Phrase Mapper architecture")
+        raise ValueError(
+            "Continue training requires the same dataset and Phrase Mapper architecture"
+        )
     path = DATA / "models" / identifier / "training.safetensors"
     if not path.is_file():
         raise ValueError(
             "This model has no local training checkpoint (downloaded bundles contain inference weights only)"
         )
+    with safe_open(str(path), framework="pt", device="cpu") as checkpoint:
+        header = checkpoint.metadata()
+        if (
+            header.get("architecture") != ARCHITECTURE
+            or header.get("event_schema") != EVENT_SCHEMA
+            or header.get("target_schema") != TARGET_SCHEMA
+            or header.get("format_version") != str(FORMAT_VERSION)
+        ):
+            raise ValueError("Obsolete training checkpoint. Train a new Phrase Mapper model.")
     values = load_file(str(path))
-    model.load_state_dict({key[6:]: value for key, value in values.items() if key.startswith("model.")})
+    model.load_state_dict(
+        {key[6:]: value for key, value in values.items() if key.startswith("model.")}
+    )
     for index, parameter in enumerate(model.parameters()):
         prefix = f"optimizer.{index}."
         for key, value in values.items():

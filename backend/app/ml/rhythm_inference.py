@@ -5,12 +5,14 @@ from scipy.ndimage import median_filter
 from .audio import FRAME_MS, tempo
 from .architecture import CENTRAL_FRAMES, AUDIO_MARGIN
 from .sequence_batches import audio_window
+from ..timing import TimingPoint, timing_at
 
 
 def encode_window(model, mel, summary, condition, central, selected_device):
     values = audio_window(mel, summary, central)
     batch = {
-        key: torch.from_numpy(value.copy()).unsqueeze(0).to(selected_device) for key, value in values.items()
+        key: torch.from_numpy(value.copy()).unsqueeze(0).to(selected_device)
+        for key, value in values.items()
     }
     with torch.no_grad():
         return model.encode(
@@ -27,9 +29,11 @@ def predict_rhythm(model, mel, summary, condition, selected_device, context):
     output = np.empty((len(mel), 4), np.float32)
     for central in range(0, len(mel), CENTRAL_FRAMES):
         context.report(0.05 + 0.3 * central / len(mel), "Musikalischen Verlauf analysieren")
-        _, _, rhythm = encode_window(model, mel, summary, condition, central, selected_device)
+        _, _, rhythm, _ = encode_window(model, mel, summary, condition, central, selected_device)
         count = min(CENTRAL_FRAMES, len(mel) - central)
-        output[central : central + count] = rhythm[0, :, AUDIO_MARGIN : AUDIO_MARGIN + count].cpu().numpy().T
+        output[central : central + count] = (
+            rhythm[0, :, AUDIO_MARGIN : AUDIO_MARGIN + count].cpu().numpy().T
+        )
     if not np.isfinite(output).all():
         raise ValueError("Model generated non-finite rhythm predictions")
     output[:, :2] = 1 / (1 + np.exp(-np.clip(output[:, :2], -60, 60)))
@@ -37,10 +41,31 @@ def predict_rhythm(model, mel, summary, condition, selected_device, context):
 
 
 def timing_map(prediction, audio_path, settings):
+    if settings.get("timing_points"):
+        points = [
+            TimingPoint(
+                point["time"],
+                point["beat_length"],
+                meter=point.get("meter"),
+                beat_confidence=1.0,
+                meter_confidence=(
+                    1.0 if point.get("meter") and point.get("bar_origin") is not None else 0.0
+                ),
+                bar_origin=point.get("bar_origin"),
+            )
+            for point in settings["timing_points"]
+        ]
+        if len(points) > 256 or any(
+            right.time <= left.time for left, right in zip(points, points[1:])
+        ):
+            raise ValueError(
+                "Manual timing points must be strictly ordered and contain at most 256 sections"
+            )
+        return points, "manual-sections"
     if settings["bpm"]:
         beat = 60000 / settings["bpm"]
         offset = settings["offset"] - np.ceil(max(0, settings["offset"]) / beat) * beat
-        return [(float(offset), float(beat))], "manual"
+        return [TimingPoint(float(offset), float(beat))], "manual"
     peaks, _ = find_peaks(
         prediction[:, 1], height=0.55, prominence=0.15, distance=max(1, round(150 / FRAME_MS))
     )
@@ -63,11 +88,17 @@ def timing_map(prediction, audio_path, settings):
             anchor, beat = fit_beat_segment(times[start : end + 1], float(filtered[start]))
             if not section:
                 anchor -= np.ceil(max(0, anchor) / beat) * beat
-            result.append((float(anchor), float(beat)))
+            result.append(
+                TimingPoint(float(anchor), float(beat), beat_confidence=float(good.mean()))
+            )
         return result, "learned"
     bpm, offset = tempo(audio_path)
     beat = 60000 / bpm
-    return [(float(offset - np.ceil(max(0, offset) / beat) * beat), float(beat))], "audio-fallback"
+    return [
+        TimingPoint(
+            float(offset - np.ceil(max(0, offset) / beat) * beat), float(beat), beat_confidence=0.35
+        )
+    ], "audio-fallback"
 
 
 def fit_beat_segment(times, estimate):
@@ -85,40 +116,8 @@ def fit_beat_segment(times, estimate):
     return float(anchor), float(beat)
 
 
-def timing_at(timing, time):
-    return next(((offset, beat) for offset, beat in reversed(timing) if offset <= time), timing[0])
+def select_times(prediction, mel, settings, timing, trace=None):
+    from .structured_rhythm import onset_candidates, select_sequence
 
-
-def select_times(prediction, mel, settings, timing):
-    active = np.max(mel, axis=1) > -0.7
-    profile = np.expm1(np.clip(prediction[:, 2], 0, 1.3) * np.log(11)) * active
-    if profile.sum() > 0.01:
-        profile *= settings["density"] / max(0.1, profile[active].mean())
-    else:
-        profile = active.astype(float) * settings["density"]
-    peaks, _ = find_peaks(prediction[:, 0], distance=max(1, round(35 / FRAME_MS)), prominence=0.005)
-    peaks = peaks[active[peaks]]
-    window, chosen = round(4000 / FRAME_MS), []
-    for start in range(0, len(mel), window):
-        candidates = peaks[(peaks >= start) & (peaks < start + window)]
-        budget = round(profile[start : start + window].sum() * FRAME_MS / 1000)
-        chosen.extend(sorted(candidates, key=lambda index: prediction[index, 0], reverse=True)[:budget])
-    result = []
-    for frame in sorted(chosen):
-        time = float(frame * FRAME_MS)
-        if settings["snap"]:
-            offset, beat = timing_at(timing, time)
-            grid = beat / settings["divisor"]
-            snapped = offset + round((time - offset) / grid) * grid
-            if abs(snapped - time) <= min(30, grid * 0.3):
-                time = float(snapped)
-        index = max(0, min(len(active) - 1, round(time / FRAME_MS)))
-        if (
-            time < 0
-            or time > (len(mel) - 1) * FRAME_MS - 100
-            or not active[index]
-            or (result and time - result[-1] < 35)
-        ):
-            continue
-        result.append(time)
-    return result
+    candidates = onset_candidates(prediction, mel, settings, timing, trace)
+    return select_sequence(candidates, timing, trace=trace)

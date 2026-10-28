@@ -149,7 +149,7 @@ def test_rollout_suite_uses_distinct_fixed_songs_and_reports_failures(monkeypatc
     from app.ml import rollout_evaluation as rollout
     from app.jobs import Cancelled
 
-    maps = [dict(map_id=str(i), song=str(i // 2)) for i in range(10)]
+    maps = [dict(map_id=str(i), song=str(i // 2), mel=np.zeros((100, 64))) for i in range(10)]
     chosen = rollout.rollout_songs(maps)
     assert len({item["song"] for item in chosen}) == 3
     assert chosen == rollout.rollout_songs(list(reversed(maps)))

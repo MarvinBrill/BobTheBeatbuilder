@@ -7,8 +7,10 @@ from .architecture import (
     GEOMETRY_SIZE,
     MOTION_FEATURES,
     DURATION_BEATS,
+    QUERY_FEATURES,
 )
 from .attention import EncoderBlock, DecoderBlock
+from .phrase_plan import PLAN_FEATURES
 
 
 class PhraseMapper(nn.Module):
@@ -28,6 +30,8 @@ class PhraseMapper(nn.Module):
         self.condition = nn.Sequential(nn.Linear(8, width), nn.GELU(), nn.Linear(width, width))
         self.global_input = nn.Linear(128, width)
         self.global_blocks = nn.ModuleList([EncoderBlock(cfg) for _ in range(cfg.global_layers)])
+        self.plan_head = nn.Linear(width, PLAN_FEATURES)
+        self.plan_projection = nn.Linear(PLAN_FEATURES, width, bias=False)
         self.audio_blocks = nn.ModuleList([EncoderBlock(cfg) for _ in range(cfg.audio_layers)])
         self.audio_norm = nn.LayerNorm(width)
         # onset, beat pulse, local log-density, log beat length
@@ -37,7 +41,7 @@ class PhraseMapper(nn.Module):
             nn.Conv1d(128, 64, 3, padding=1), nn.GELU(), nn.Conv1d(64, 4, 1)
         )
         self.event_input = nn.Linear(EVENT_FEATURES, width)
-        self.query_input = nn.Linear(20, width)
+        self.query_input = nn.Linear(QUERY_FEATURES, width)
         self.decoder = nn.ModuleList([DecoderBlock(cfg) for _ in range(cfg.decoder_layers)])
         self.event_norm = nn.LayerNorm(width)
         self.geometry = nn.Linear(width, cfg.mixtures * (1 + 2 * GEOMETRY_SIZE))
@@ -59,6 +63,9 @@ class PhraseMapper(nn.Module):
         )
         for block in self.global_blocks:
             global_memory = block(global_memory)
+        plan = torch.sigmoid(self.plan_head(global_memory))
+        if self.config.enable_plan:
+            global_memory = global_memory + self.plan_projection(plan)
         local = (
             self.audio_front(audio).transpose(1, 2)
             + self.audio_position(audio_times)
@@ -73,9 +80,11 @@ class PhraseMapper(nn.Module):
         memory = self.audio_norm(memory)
         detailed = self.rhythm_up(memory[:, : local.shape[1]].transpose(1, 2))
         rhythm = self.rhythm(torch.cat([detailed, self.rhythm_local(audio)], dim=1))
-        return memory, valid, rhythm
+        return memory, valid, rhythm, plan
 
     def decode(self, previous, queries, event_valid, memory, memory_valid):
+        if not self.config.enable_musical_time:
+            queries = torch.cat([queries[..., :20], torch.zeros_like(queries[..., 20:])], dim=-1)
         value = self.event_input(previous) + self.query_input(queries)
         for block in self.decoder:
             value = block(value, memory, event_valid, memory_valid)
@@ -94,7 +103,7 @@ class PhraseMapper(nn.Module):
         return self.critic(torch.cat([hidden, geometry, motion], dim=-1)).squeeze(-1)
 
     def forward(self, batch):
-        memory, valid, rhythm = self.encode(
+        memory, valid, rhythm, plan = self.encode(
             batch["audio"],
             batch["summary"],
             batch["condition"],
@@ -106,6 +115,7 @@ class PhraseMapper(nn.Module):
             batch["previous"], batch["queries"], batch["event_valid"], memory, valid
         )
         result["rhythm"] = rhythm
+        result["plan"] = plan
         if self.training and "context_probability" in batch:
             from .context_training import predicted_history
 

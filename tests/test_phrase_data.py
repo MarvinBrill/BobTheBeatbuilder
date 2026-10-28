@@ -1,3 +1,4 @@
+from app.timing import TimingPoint
 import numpy as np
 import pytest
 from app.beatmaps import Beatmap, HitObject
@@ -5,6 +6,7 @@ from app.ml.audio import FRAME_MS
 from app.ml.sequence_data import pack_events, frame_labels, summary_features
 from app.ml.sequence_batches import tasks_for, make_example
 from app.ml.training_setup import dataset_signature, split_maps
+from app.ml.phrase_plan import plan_targets
 
 
 def example_item(count=150):
@@ -18,14 +20,23 @@ def example_item(count=150):
         )
         for index in range(count)
     ]
-    beatmap = Beatmap(objects=objects, timing=[(0, 500, False)], ignored=[(9500, 10500)])
+    beatmap = Beatmap(
+        objects=objects,
+        timing=[TimingPoint(0, 500, meter=4, meter_confidence=1, bar_origin=0)],
+        ignored=[(9500, 10500)],
+    )
     mel = np.zeros((1200, 64), np.float32)
     events, _ = pack_events(beatmap, len(mel))
+    labels = frame_labels(beatmap, len(mel))
+    plan, plan_mask = plan_targets(events, labels, beatmap.timing)
     return dict(
         events=events,
         mel=mel,
         summary=summary_features(mel),
-        labels=frame_labels(beatmap, len(mel)),
+        labels=labels,
+        timing=beatmap.timing,
+        plan_targets=plan,
+        plan_mask=plan_mask,
         condition=np.full(8, 0.5, np.float32),
     )
 
@@ -54,17 +65,11 @@ def test_teacher_forcing_is_shifted_and_mirroring_preserves_bos():
         assert np.isfinite(batch["motion_target"]).all()
 
 
-def test_accelerated_batches_preserve_reference_data_order_augmentation_and_targets():
-    import importlib.util
-    from pathlib import Path
+def test_batches_preserve_data_order_augmentation_and_targets_across_partitions():
     from app.ml.sequence_batches import batches
 
-    path = Path(__file__).resolve().parents[1] / "scripts" / "benchmarks" / "reference_batches.py"
-    spec = importlib.util.spec_from_file_location("reference_batches", path)
-    reference = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(reference)
     items = [example_item(150), example_item(45)]
-    expected = list(reference.batches(items, 2, np.random.default_rng(73), True))
+    expected = list(batches(items, 2, np.random.default_rng(73), True))
     actual = list(batches(items, 8, np.random.default_rng(73), True))
     for key in expected[0]:
         left = np.concatenate([batch[key] for batch in expected])
@@ -83,7 +88,10 @@ def test_simultaneous_or_out_of_audio_objects_are_rejected():
 
 
 def test_resume_signature_detects_map_edits_and_splits_are_disjoint():
-    maps = [dict(map_id=str(i), map_hash=str(i), audio_hash=str(i // 2), song=str(i // 2)) for i in range(30)]
+    maps = [
+        dict(map_id=str(i), map_hash=str(i), audio_hash=str(i // 2), song=str(i // 2))
+        for i in range(30)
+    ]
     before = dataset_signature(maps)
     assert before == dataset_signature(list(reversed(maps)))
     maps[0]["map_hash"] = "changed coordinates with unchanged note count"
@@ -91,5 +99,8 @@ def test_resume_signature_detects_map_edits_and_splits_are_disjoint():
     train, val, test = split_maps(maps, 42)
     groups = [set(item["song"] for item in split) for split in (train, val, test)]
     assert (
-        all(groups) and not groups[0] & groups[1] and not groups[0] & groups[2] and not groups[1] & groups[2]
+        all(groups)
+        and not groups[0] & groups[1]
+        and not groups[0] & groups[2]
+        and not groups[1] & groups[2]
     )

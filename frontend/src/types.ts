@@ -29,7 +29,9 @@ export interface Metric {
 export interface RolloutSuite {
   songs: number;
   attempted: number;
-  max_objects_per_song: number;
+  sections: number;
+  max_objects_per_section: number;
+  max_objects_full_song: number | null;
   means: Record<string, number>;
   failures: { map_id: string; reason: string }[];
   epoch?: number;

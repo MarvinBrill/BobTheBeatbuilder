@@ -1,3 +1,4 @@
+from app.timing import TimingPoint
 import torch
 import json
 import numpy as np
@@ -16,7 +17,10 @@ from app.jobs import Cancelled
     [
         "cpu",
         pytest.param(
-            "cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA hardware required")
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA hardware required"
+            ),
         ),
     ],
 )
@@ -45,27 +49,36 @@ def test_restored_optimizer_performs_identical_next_update(device):
     assert state == dict(completed_epochs=2, optimizer_steps=1)
     step(first, first_optimizer)
     step(second, second_optimizer)
-    assert all(torch.equal(left, right) for left, right in zip(first.parameters(), second.parameters()))
+    assert all(
+        torch.equal(left, right) for left, right in zip(first.parameters(), second.parameters())
+    )
 
 
 def test_cancelled_training_is_preserved_and_can_continue(monkeypatch):
     from app.ml import training
     from app.ml.sequence_data import pack_events, frame_labels, summary_features
     from app.beatmaps import Beatmap, HitObject
+    from app.ml.phrase_plan import plan_targets
 
     torch.set_num_threads(2)
     mel = np.zeros((1024, 64), np.float32)
     beatmap = Beatmap(
         objects=[
-            HitObject(100 + i * 30, 100, 500 + i * 500, end_x=100 + i * 30, end_y=100) for i in range(8)
+            HitObject(100 + i * 30, 100, 500 + i * 500, end_x=100 + i * 30, end_y=100)
+            for i in range(8)
         ],
-        timing=[(0, 500, False)],
+        timing=[TimingPoint(0, 500, meter=4, meter_confidence=1, bar_origin=0)],
     )
     events, _ = pack_events(beatmap, len(mel))
+    labels = frame_labels(beatmap, len(mel))
+    plan, plan_mask = plan_targets(events, labels, beatmap.timing)
     item = dict(
         mel=mel,
         events=events,
-        labels=frame_labels(beatmap, len(mel)),
+        labels=labels,
+        timing=beatmap.timing,
+        plan_targets=plan,
+        plan_mask=plan_mask,
         summary=summary_features(mel),
         condition=np.full(8, 0.5, np.float32),
         masked_geometry=0,

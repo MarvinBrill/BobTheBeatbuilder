@@ -1,3 +1,4 @@
+from app.timing import TimingPoint
 import math
 import numpy as np
 import pytest
@@ -32,7 +33,7 @@ def test_digital_silence_and_broken_cache_do_not_generate_notes(tmp_path):
     mel = features(path, "silence-test")
     assert np.all(mel == -1)
     scores = np.random.default_rng(1).random((len(mel), 4)).astype(np.float32)
-    assert select_times(scores, mel, SETTINGS, [(0, 500)]) == []
+    assert select_times(scores, mel, SETTINGS, [TimingPoint(0, 500)]) == []
 
 
 def test_invalid_cache_shape_is_rebuilt_on_windows(tmp_path):

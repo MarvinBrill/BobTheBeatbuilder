@@ -25,7 +25,9 @@ class Context:
 def await_job(client, identifier, timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        job = next(job for job in client.get("/api/state").json()["jobs"] if job["id"] == identifier)
+        job = next(
+            job for job in client.get("/api/state").json()["jobs"] if job["id"] == identifier
+        )
         if job["status"] not in ("queued", "running"):
             assert job["status"] == "completed", job
             return job["result"]
@@ -56,7 +58,10 @@ def test_full_api_training_generation_and_download(tmp_path):
                 np.sin(2 * np.pi * (440 + track * 80) * phase) * np.exp(-phase * 20)
             ).astype(np.float32)
         sf.write(folder / "audio.wav", samples, 22050)
-        objects = [HitObject(80 + index * 40, 100 + index % 2 * 100, 250 + index * 500) for index in range(7)]
+        objects = [
+            HitObject(80 + index * 40, 100 + index % 2 * 100, 250 + index * 500)
+            for index in range(7)
+        ]
         write(
             folder / "map.osu",
             objects,
@@ -108,16 +113,24 @@ def test_full_api_training_generation_and_download(tmp_path):
         bundle = client.get(f"/api/models/{model_id}/download")
         with zipfile.ZipFile(io.BytesIO(bundle.content)) as archive:
             assert set(archive.namelist()) == {"model.safetensors", "metadata.json"}
-        imported_job = client.post("/api/models/import", files={"file": ("model.zip", bundle.content)}).json()
+        imported_job = client.post(
+            "/api/models/import", files={"file": ("model.zip", bundle.content)}
+        ).json()
         imported_id = await_job(client, imported_job["id"])["model_id"]
         assert imported_id != model_id
-        assert store.get("model", imported_id)["architecture"] == "phrase-mapper-v3"
+        assert store.get("model", imported_id)["architecture"] == "phrase-mapper-v5"
         audio = client.post(
             "/api/audio", files={"file": ("new.wav", (tmp_path / "0/audio.wav").read_bytes())}
         ).json()
         job = client.post(
             "/api/generate",
-            json={"model_id": model_id, "audio_id": audio["id"], **settings, "bpm": 120, "density": 4},
+            json={
+                "model_id": model_id,
+                "audio_id": audio["id"],
+                **settings,
+                "bpm": 120,
+                "density": 4,
+            },
         ).json()
         output_id = await_job(client, job["id"])["output_id"]
         preview = client.get(f"/api/outputs/{output_id}/preview").json()

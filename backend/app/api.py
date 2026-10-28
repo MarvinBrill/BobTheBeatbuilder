@@ -58,7 +58,7 @@ def state():
                 }
             )
             for item in store.all_records("model")
-            if item["architecture"] == ARCHITECTURE and item.get("event_schema") == EVENT_SCHEMA
+            if item.get("architecture") == ARCHITECTURE and item.get("event_schema") == EVENT_SCHEMA
         ],
         "jobs": store.all_records("job")[:100],
         "outputs": [public(item) for item in store.all_records("output")],

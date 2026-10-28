@@ -1,8 +1,9 @@
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from .slider_paths import endpoint, slider_path
 from .curve_geometry import fitted_curve, curve_length
+from .timing import TimingPoint, red_points, timing_at
 
 
 @dataclass
@@ -35,13 +36,13 @@ class Beatmap:
 
     def timing_at(self, time):
         beat, velocity = 500.0, 1.0
-        for offset, length, inherited in self.timing:
-            if offset > time:
+        for point in self.timing:
+            if point.time > time:
                 break
-            if not inherited and length > 0:
-                beat, velocity = length, 1.0
-            elif inherited and length < 0:
-                velocity = min(10.0, max(0.1, -100 / length))
+            if not point.inherited:
+                beat, velocity = point.beat_length, 1.0
+            else:
+                velocity = min(10.0, max(0.1, -100 / point.beat_length))
         return beat, velocity
 
     def info(self):
@@ -95,11 +96,23 @@ def parse(path: Path) -> Beatmap:
             inherited = parts[6] == "0" if len(parts) > 6 else beat < 0
             if inherited != (beat < 0):
                 raise ValueError("Timing point sign disagrees with inherited flag")
-            result.timing.append((time, beat, inherited))
+            meter = int(parts[2]) if len(parts) > 2 and parts[2] else None
+            known_meter = meter is not None and not inherited
+            result.timing.append(
+                TimingPoint(
+                    time,
+                    beat,
+                    inherited,
+                    meter,
+                    1.0,
+                    1.0 if known_meter else 0.0,
+                    time if known_meter else None,
+                )
+            )
         elif section == "HitObjects":
             lines.append(line)
 
-    result.timing.sort(key=lambda point: point[0])
+    result.timing.sort(key=lambda point: point.time)
     for line in lines:
         parts = line.split(",")
         x, y, time = map(float, parts[:3])
@@ -179,7 +192,7 @@ def write(path, objects, settings, audio_name, bpm, offset, timing=None):
         "[Events]",
         "",
         "[TimingPoints]",
-        *timing_lines(objects, timing or [(offset, beat)]),
+        *timing_lines(objects, timing or [TimingPoint(offset, beat)]),
         "",
         "[Colours]",
         "Combo1:255,108,176",
@@ -209,19 +222,33 @@ def write(path, objects, settings, audio_name, bpm, offset, timing=None):
 
 
 def timing_lines(objects, timing):
-    timing = sorted((round(time), length) for time, length in timing)
-    entries = [(time, 0, f"{time:.3f},{length:.8f},4,2,0,70,1,0") for time, length in timing]
+    timing = [replace(point, time=round(point.time)) for point in red_points(timing)]
+    if not timing:
+        raise ValueError("Export requires beat timing")
+    # osu! requires a positive meter. Four is only an export default when unknown;
+    # it must not be fed back as evidence for generation or timing features.
+    entries = [
+        (
+            round(point.time),
+            0,
+            f"{round(point.time):.3f},{point.beat_length:.8f},{point.meter or 4},2,0,70,1,0",
+        )
+        for point in timing
+    ]
     for obj in objects:
         if not obj.slider or not obj.curve or obj.duration <= 0:
             continue
         length = curve_length([[round(x), round(y)] for x, y in obj.curve])
-        beat = next(
-            (length for time, length in reversed(timing) if time <= round(obj.time)), timing[0][1]
-        )
+        point = timing_at(timing, round(obj.time))
+        beat = point.beat_length
         velocity = length * obj.repeats * beat / (140 * obj.duration)
         if not 0.1 <= velocity <= 10:
             raise ValueError("Generated slider velocity is outside osu! limits")
         entries.append(
-            (round(obj.time), 1, f"{round(obj.time)},{-100 / velocity:.8f},4,2,0,70,0,0")
+            (
+                round(obj.time),
+                1,
+                f"{round(obj.time)},{-100 / velocity:.8f},{point.meter or 4},2,0,70,0,0",
+            )
         )
     return [line for _, _, line in sorted(entries, key=lambda entry: entry[:2])]

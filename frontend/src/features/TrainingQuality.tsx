@@ -4,8 +4,11 @@ export function RolloutQuality({ suite }: { suite: RolloutSuite }) {
   return (
     <div className="fine-print">
       <p>
-        Freie Generierung: {suite.songs}/{suite.attempted} Song-Abschnitte · bis
-        zu {suite.max_objects_per_song} Objekte pro Song.
+        Freie Generierung: {suite.sections}/{suite.attempted} Prüfabschnitte aus{" "}
+        {suite.songs} Songs · bis zu {suite.max_objects_per_section} Objekte pro Abschnitt.
+        {suite.max_objects_full_song
+          ? ` Zusätzlicher Vollsonglauf: höchstens ${suite.max_objects_full_song} Objekte.`
+          : ""}
         {suite.epoch ? ` Gespeicherter Stand: Epoche ${suite.epoch}.` : ""}
       </p>
       {suite.songs > 0 && (
@@ -19,8 +22,8 @@ export function RolloutQuality({ suite }: { suite: RolloutSuite }) {
           Spielspaß-Score.
         </p>
       )}
-      {suite.failures.map((failure) => (
-        <p key={failure.map_id}>
+      {suite.failures.map((failure, index) => (
+        <p key={`${failure.map_id}-${index}`}>
           Prüfabschnitt {failure.map_id}: {failure.reason}
         </p>
       ))}

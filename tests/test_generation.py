@@ -1,3 +1,4 @@
+from app.timing import TimingPoint
 import numpy as np
 import pytest
 from app.beatmaps import HitObject, parse, write
@@ -24,13 +25,23 @@ CURVE = np.array([[100, 100], [150, 40], [220, 230], [280, 160]]) / [512, 384]
 
 @pytest.mark.parametrize("repeats", [1, 2, 3, 4])
 def test_curved_repeated_sliders_roundtrip_across_tempo_changes(tmp_path, repeats):
-    first = candidate_object(CURVE.reshape(-1), 1000, 2000, 500, True, 1, repeats, True, SETTINGS, [])[0]
-    second = candidate_object(CURVE.reshape(-1), 3000, 4000, 400, True, 1, repeats, False, SETTINGS, [first])[
-        0
-    ]
+    first = candidate_object(
+        CURVE.reshape(-1), 1000, 2000, 500, True, 1, repeats, True, SETTINGS, []
+    )[0]
+    second = candidate_object(
+        CURVE.reshape(-1), 3000, 4000, 400, True, 1, repeats, False, SETTINGS, [first]
+    )[0]
     assert first.slider and second.slider
     path = tmp_path / "map.osu"
-    write(path, [first, second], SETTINGS, "audio.ogg", 120, 0, [(0, 500), (2500, 400)])
+    write(
+        path,
+        [first, second],
+        SETTINGS,
+        "audio.ogg",
+        120,
+        0,
+        [TimingPoint(0, 500), TimingPoint(2500, 400)],
+    )
     parsed = parse(path).objects
     for actual, expected in zip(parsed, [first, second]):
         assert actual.repeats == repeats and actual.new_combo == expected.new_combo
@@ -44,7 +55,9 @@ def test_playability_preserves_triplets_bounds_and_time_to_next_object():
         CURVE.reshape(-1), 1000, 1200, 500, True, 1 / 3, 1, False, SETTINGS, []
     )
     assert obj.time + obj.duration <= 1200 - 35 + 1e-6
-    triplet = candidate_object(CURVE.reshape(-1), 1000, 1300, 500, True, 1 / 3, 1, False, SETTINGS, [])[0]
+    triplet = candidate_object(
+        CURVE.reshape(-1), 1000, 1300, 500, True, 1 / 3, 1, False, SETTINGS, []
+    )[0]
     assert triplet.duration == pytest.approx(500 / 3)
     last = HitObject(40, 40, 900, end_x=40, end_y=40)
     circle, _, _, repair = candidate_object(
@@ -70,8 +83,8 @@ def test_learned_timing_recognizes_tempo_change_without_audio_fallback(monkeypat
     monkeypatch.setattr("app.ml.rhythm_inference.tempo", unexpected)
     timing, source = timing_map(prediction, "unused", SETTINGS)
     assert source == "learned" and len(timing) == 2
-    assert timing[0][1] == pytest.approx(500, abs=15)
-    assert timing[1][1] == pytest.approx(400, abs=15)
+    assert timing[0].beat_length == pytest.approx(500, abs=15)
+    assert timing[1].beat_length == pytest.approx(400, abs=15)
 
 
 def test_manual_tempo_and_snapping_do_not_create_notes_in_silence():
@@ -80,7 +93,7 @@ def test_manual_tempo_and_snapping_do_not_create_notes_in_silence():
     mel = np.zeros((500, 64), np.float32)
     mel[100:300] = -1
     timing, source = timing_map(prediction, "unused", {**SETTINGS, "bpm": 120, "offset": 5000})
-    assert source == "manual" and timing[0][0] <= 0
+    assert source == "manual" and timing[0].time <= 0
     times = select_times(prediction, mel, SETTINGS, timing)
     assert times and all(not 100 <= round(time / FRAME_MS) < 300 for time in times)
 

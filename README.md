@@ -17,7 +17,7 @@ Beatmaps + audio → curated dataset → train one model → new audio → .osz 
 - Import from **osu!lazer**, stable Songs folders, or `.osz`/`.zip` archives.
 - Search, star-range filters, cross-page selection, and **one difficulty per song**: easiest, middle, or hardest.
 - Local training on **CUDA, DirectML, or CPU**, with learning curves, validation, throughput, and GPU memory statistics.
-- A single model for rhythm and movement, using extended audio context and autoregressive object history.
+- A single model for rhythm, a compact phrase plan, and movement, using extended audio context and autoregressive object history.
 - Generation controls for AR, CS, OD, HP, density, slider preference, spacing, directional flow, variation, and timing.
 - Audio/playfield preview, volume control, and `.osz` export for osu!lazer.
 - Model download/import using Safetensors weights and metadata.
@@ -143,15 +143,17 @@ Prefer diverse songs and consistent mapping standards. Hundreds of different son
 Compact has approximately **2.3M** parameters and Large **33.4M**. More capacity can learn richer patterns, but also overfit; it is not automatically better.
 
 - Roughly **15% of song groups** are reserved for validation when at least two exist; a separate final test uses roughly **10%** when there are at least five. Identical audio hashes or normalized artist/title metadata connect maps into groups. This is a heuristic, not acoustic duplicate detection.
-- The total loss combines rhythm, geometry, object-structure, and movement objectives. It is not a percentage or a playability score. The checkpoint with the lowest total validation loss is used for generation.
+- The main loss combines twelve rhythm, geometry, object-structure, movement and compatibility objectives. It is not a percentage or a playability score. The checkpoint with the lowest main validation loss is used for generation; auxiliary plan and optional context losses are reported separately.
 - A validation plateau reduces the learning rate before early stopping. Default patience is 12 epochs without a new best score, with time allowed after a reduction. Epoch count is an upper limit.
-- Free validation examines up to three fixed song excerpts with at most 256 objects each, at epoch 1, every five epochs, and at the end. It uses the model's own generated history and does not replace full-song playtests.
+- Free validation examines fixed 24-second sections from up to three songs, including later sections, activity changes and audio-window transitions, with at most 128 objects per section. It runs at epoch 1, every five epochs, and at the end. Final evaluation also allows one full song of at most 300 seconds and 2048 objects. Truncation is explicit; these checks do not replace playtests.
 - Resuming requires the same unchanged dataset and local optimizer checkpoint. The learning-rate controller is retained, and the requested epochs are an additional budget. Interrupted epochs restart; the random sequence is not resumed bit-for-bit.
 - Preparation uses two CPU workers and verified caches. `BOB_PREPARE_WORKERS=1` forces serial preparation; up to `4` workers are supported. Clearing or evicting caches increases preparation work on the next run.
 
 ## Architecture and current limits
 
-The Phrase Mapper combines a hierarchical audio Transformer with a causal object decoder: roughly **24 seconds of detailed audio context**, **128 song-summary tokens**, and up to **128 previous hit objects**. A single inference checkpoint predicts rhythm and object properties, including cubic slider geometry.
+The Phrase Mapper combines a hierarchical audio Transformer with a causal object decoder: roughly **24 seconds of detailed audio context**, **128 song-summary tokens**, and up to **128 previous hit objects**. One inference checkpoint predicts rhythm, seven uncertain mapping-plan proxies and object properties, including cubic slider geometry. Decoder queries explicitly represent musical time and timing confidence; unknown meter stays unknown.
+
+The current architecture is **phrase-mapper-v5**, model format **5**, target schema **musical-plan-targets-v3**. It requires fresh preparation and training. Older weights and optimizer states are rejected with an explanation; existing files are retained, without converters or legacy inference paths.
 
 Generation combines learned predictions with timing selection and playability constraints. Density can vary across musical sections within your overall density preference. Slider preference is not a guaranteed percentage. **OD controls hit-window strictness, not a target star rating.** Presets do not guarantee an official difficulty rating.
 
@@ -159,7 +161,9 @@ Generation combines learned predictions with timing selection and playability co
 - Slider targets use one cubic Bézier approximation, 1–4 traversals, and discrete durations up to 16 beats. Unsupported geometry still contributes its start position and object type, but not its curve target.
 - Complex tempo changes, swing, unusual sliders, and long-range structure may need editing. Automatic timing can fall back to a constant-tempo audio estimate; manual BPM/offset controls are available.
 - Training mainly uses reference object history. Free generation can accumulate errors. The optional own-position objective remains experimental because comparisons showed mixed results.
-- Timing and geometry guards reject overlaps, extreme movement, loops, sharp hooks, and excessive detours. They can also exclude intentional specialist patterns. Unsuitable sliders can fall back to circles.
+- Rhythm selection uses a bounded sequence search and a soft density target. Object planning compares circle/slider structure and geometry together; a weak interior onset can yield to a supported sustained slider, while strong accents remain protected.
+- Timing and geometry guards reject overlaps, extreme movement, loops, sharp hooks, and excessive detours. They can also exclude intentional specialist patterns. Unsuitable sliders can fall back to circles. The movement ceiling is independent of OD.
+- Optional API flags `trace`, `lookahead`, and `motifs` expose decisions or enable bounded experiments. Lookahead and motif memory default to off. Full manual timing sections can preserve meter and bar origin; BPM/offset alone does not establish a downbeat.
 - No claim of ranked-map quality or state-of-the-art performance. Evaluate generated maps on unfamiliar songs through actual gameplay.
 
 ## Storage, deletion, and backups
@@ -234,6 +238,9 @@ Detailed implementation and measurement notes are currently in German:
 - [Verification coverage and remaining gaps](docs/verification.md)
 - [CUDA throughput and memory measurements](docs/cuda-performance.md)
 - [Training-policy comparisons and quality caveats](docs/training-validation.md)
+- [Architecture work plan and decisions](docs/architecture-roadmap.md)
+- [Current architecture comparisons, corpus audit and blind playtests](docs/architecture-evaluation.md)
+- [Musical time and the learned plan](docs/musical-time.md)
 - [Preparation and idle-performance measurements](docs/preparation-performance.md)
 
 ## References and acknowledgements

@@ -2,6 +2,7 @@ import math
 import torch
 from .architecture import GEOMETRY_SIZE
 from .movement import motion_tensor
+from .context_counterfactuals import counterfactuals
 
 
 def binary_loss(logits, target, positive_weight=1):
@@ -72,26 +73,10 @@ def parts(model, output, batch, onset_weight=20):
     positive = model.compatibility(
         output["hidden"], batch["geometry_target"], batch["motion_target"]
     )
-    # Counterfactual geometry in the same audio/history: a compatibility objective, not human ratings.
-    negative_geometry = torch.cat(
-        [batch["geometry_target"][:, -7:], batch["geometry_target"][:, :-7]], dim=1
-    )
-    negative_motion = motion_tensor(
-        negative_geometry,
-        batch["seconds_target"],
-        batch["repeat_target"] + 1,
-        batch["kind_target"],
-        batch["event_times"],
-        batch["motion_context"],
-    )
+    # Weak reference-style compatibility, not a human quality or correctness label.
+    negative_geometry, negative_motion, pair_mask, preference = counterfactuals(batch)
     negative = model.compatibility(output["hidden"], negative_geometry, negative_motion)
-    distinct = ((negative_geometry - batch["geometry_target"]).square().sum(-1) > 0.02).to(
-        mask.dtype
-    )
-    negative_valid = batch["event_valid"] * batch["geometry_valid"]
-    negative_valid = torch.cat([negative_valid[:, -7:], negative_valid[:, :-7]], dim=1)
-    pair_mask = mask * distinct * batch["geometry_valid"] * negative_valid
-    ranking = binary_loss(positive - negative, torch.ones_like(positive))
+    ranking = binary_loss(positive - negative, preference)
 
     def term(value, valid, weight=1):
         return ((value * valid).sum() * weight, valid.sum())
@@ -114,6 +99,10 @@ def parts(model, output, batch, onset_weight=20):
         "flow": term(movement_error, mask * batch["geometry_valid"], 0.15),
         "compatibility": term(ranking, pair_mask, 0.1),
     }
+    if model.config.enable_plan:
+        terms["plan"] = term(
+            smooth_error(output["plan"] - batch["plan_targets"]), batch["plan_mask"], 0.1
+        )
     if "robust_geometry" in output:
         from .context_training import auxiliary_terms
 
@@ -156,4 +145,4 @@ class LossMeter:
         return {key: value / max(1, count) for key, (value, count) in self.totals.items()}
 
     def value(self):
-        return sum(self.values().values())
+        return sum(value for key, value in self.values().items() if key not in ("plan", "context"))

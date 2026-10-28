@@ -3,7 +3,7 @@ import json
 import zipfile
 import numpy as np
 from .. import store
-from .architecture import ModelConfig, ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA
+from .architecture import ModelConfig, ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA
 
 
 def configuration(size):
@@ -31,7 +31,10 @@ def split_maps(prepared, seed):
 def dataset_signature(prepared):
     return hashlib.sha256(
         json.dumps(
-            sorted((item["map_id"], item["map_hash"], item["audio_hash"], item["song"]) for item in prepared),
+            sorted(
+                (item["map_id"], item["map_hash"], item["audio_hash"], item["song"])
+                for item in prepared
+            ),
             sort_keys=True,
         ).encode()
     ).hexdigest()
@@ -41,7 +44,9 @@ def metadata_for(identifier, settings, cfg, prepared, split, issues):
     training, validation, test = split
     warnings = []
     if len({item["song"] for item in prepared}) < 20:
-        warnings.append("Weniger als 20 Song-Gruppen: nur ein Funktionstest, hohes Overfitting-Risiko.")
+        warnings.append(
+            "Weniger als 20 Song-Gruppen: nur ein Funktionstest, hohes Overfitting-Risiko."
+        )
     if not validation:
         warnings.append("Keine unabhängigen Prüfsongs verfügbar.")
     if not test:
@@ -55,7 +60,9 @@ def metadata_for(identifier, settings, cfg, prepared, split, issues):
         warnings.append(
             f"{masked} Slider außerhalb der unterstützten Kurven-, Wiederholungs- oder Zeitgrenzen: nur Startposition und Objekttyp werden gelernt."
         )
-    slider_count = int(sum((item["events"][:, 9] * item["events"][:, 14]).sum() for item in training))
+    slider_count = int(
+        sum((item["events"][:, 9] * item["events"][:, 14]).sum() for item in training)
+    )
     if not slider_count:
         warnings.append("Keine geeigneten Trainings-Slider: das Modell wird nur Circles erzeugen.")
     return {
@@ -64,6 +71,7 @@ def metadata_for(identifier, settings, cfg, prepared, split, issues):
         "architecture": ARCHITECTURE,
         "format_version": FORMAT_VERSION,
         "event_schema": EVENT_SCHEMA,
+        "target_schema": TARGET_SCHEMA,
         "model_config": cfg.dictionary(),
         "created_at": store.now(),
         "settings": settings,

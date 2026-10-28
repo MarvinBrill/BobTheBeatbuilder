@@ -1,7 +1,15 @@
 import numpy as np
-from .architecture import AUDIO_WINDOW, CENTRAL_FRAMES, AUDIO_MARGIN, EVENT_CONTEXT, EVENT_TARGETS
+from .architecture import (
+    AUDIO_WINDOW,
+    CENTRAL_FRAMES,
+    AUDIO_MARGIN,
+    EVENT_CONTEXT,
+    EVENT_TARGETS,
+    QUERY_FEATURES,
+)
 from .audio import FRAME_MS
 from .movement import motion_batch_numpy
+from .musical_time import musical_time_features, disturbed_timing
 
 
 def clock_features(seconds, duration):
@@ -13,7 +21,7 @@ def clock_features(seconds, duration):
     ).astype(np.float32)
 
 
-def event_queries(times, previous_times, next_times, duration):
+def event_queries(times, previous_times, next_times, duration, timing):
     before, after = np.maximum(0, times - previous_times), np.maximum(0, next_times - times)
     return np.concatenate(
         [
@@ -21,6 +29,7 @@ def event_queries(times, previous_times, next_times, duration):
             np.log1p(before)[..., None] / 3,
             np.log1p(after)[..., None] / 3,
             np.log((before + 0.025) / (after + 0.025))[..., None] / 4,
+            musical_time_features(times, timing),
         ],
         axis=-1,
     ).astype(np.float32)
@@ -33,7 +42,8 @@ def tasks_for(maps):
         for central in range(0, len(item["mel"]), CENTRAL_FRAMES):
             indices = np.flatnonzero((frames >= central) & (frames < central + CENTRAL_FRAMES))
             chunks = [
-                indices[start : start + EVENT_TARGETS] for start in range(0, len(indices), EVENT_TARGETS)
+                indices[start : start + EVENT_TARGETS]
+                for start in range(0, len(indices), EVENT_TARGETS)
             ] or [indices]
             for chunk in chunks:
                 tasks.append((map_index, central, chunk, 1 / len(chunks)))
@@ -61,6 +71,13 @@ def audio_window(mel, summary, central):
 def make_example(item, central, target_indices, rhythm_weight, rng=None):
     result = audio_window(item["mel"], item["summary"], central)
     result["condition"] = item["condition"].copy()
+    result["plan_targets"] = item["plan_targets"].copy()
+    # Supervise only this local window's summary bins, once across object chunks.
+    plan_positions = (
+        (np.arange(len(item["summary"])) + 0.5) / len(item["summary"]) * len(item["mel"])
+    )
+    plan_central = (plan_positions >= central) & (plan_positions < central + CENTRAL_FRAMES)
+    result["plan_mask"] = item["plan_mask"] * plan_central[:, None] * rhythm_weight
     start, duration = central - AUDIO_MARGIN, len(item["mel"]) * FRAME_MS / 1000
     labels = np.zeros((AUDIO_WINDOW, 6), np.float32)
     left, right = max(0, start), min(len(item["mel"]), start + AUDIO_WINDOW)
@@ -71,7 +88,7 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None):
     result["frame_targets"] = labels.T
 
     rows = np.zeros((EVENT_CONTEXT, 47), np.float32)
-    queries = np.zeros((EVENT_CONTEXT, 20), np.float32)
+    queries = np.zeros((EVENT_CONTEXT, QUERY_FEATURES), np.float32)
     valid, mask = np.zeros(EVENT_CONTEXT, np.float32), np.zeros(EVENT_CONTEXT, np.float32)
     if len(target_indices):
         end = int(target_indices[-1]) + 1
@@ -84,9 +101,13 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None):
         all_times = item["events"][:, 0]
         before = np.where(selected > 0, all_times[np.maximum(0, selected - 1)], 0)
         after = np.where(
-            selected + 1 < len(all_times), all_times[np.minimum(len(all_times) - 1, selected + 1)], duration
+            selected + 1 < len(all_times),
+            all_times[np.minimum(len(all_times) - 1, selected + 1)],
+            duration,
         )
-        queries[:count] = event_queries(rows[:count, 0], before, after, duration)
+        queries[:count] = event_queries(
+            rows[:count, 0], before, after, duration, disturbed_timing(item["timing"], rng)
+        )
     else:
         valid[0] = 1  # Valid BOS prevents all-masked attention in rests.
     if rng is not None:
@@ -97,8 +118,8 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None):
                 rows[:, np.arange(15 + axis, 25, 2)] = 1 - rows[:, np.arange(15 + axis, 25, 2)]
                 rows[:, 31 + axis] = 1 - rows[:, 31 + axis]
                 rows[:, 33 + axis] *= -1
-        # Mild context noise reduces sensitivity to small generated-position errors.
-        rows[:, 15:25] += rng.normal(0, 0.006, rows[:, 15:25].shape).astype(np.float32) * valid[:, None]
+        # Preserve coherent reference history. Independent control/end-point noise
+        # changed slider shapes without updating dependent motion targets.
         rows[~has_previous, 15:31] = 0
         gain = rng.uniform(0.9, 1.1)
         result["audio"] = np.clip((result["audio"] + 1) * gain - 1, -1, 1)

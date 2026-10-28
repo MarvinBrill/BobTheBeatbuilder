@@ -1,3 +1,4 @@
+import hashlib
 import re
 import unicodedata
 
@@ -32,4 +33,15 @@ def song_groups(records):
             if key in seen:
                 parents[root(index)] = root(seen[key])
             seen[key] = index
-    return [str(root(index)) for index in range(len(records))]
+    members = {}
+    for index, record in enumerate(records):
+        keys = members.setdefault(root(index), set())
+        keys.add("audio:" + record["audio_hash"])
+        name = identity(record)
+        if name:
+            keys.add("title:" + name)
+    stable = {
+        group: hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()
+        for group, keys in members.items()
+    }
+    return [stable[root(index)] for index in range(len(records))]

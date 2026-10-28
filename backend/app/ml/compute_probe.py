@@ -1,3 +1,4 @@
+from ..timing import TimingPoint
 import numpy as np
 import torch
 from ..beatmaps import Beatmap, HitObject
@@ -8,6 +9,7 @@ from .sequence_data import pack_events, frame_labels, summary_features
 from .sequence_batches import make_example
 from .training_runtime import TrainingRuntime
 from .cuda_graph import CudaTrainingGraph
+from .phrase_plan import plan_targets
 
 
 def probe_batch():
@@ -23,15 +25,32 @@ def probe_batch():
         for index in range(12)
     ]
     objects[3] = HitObject(
-        200, 150, 2000, True, 200, 300, 180, True, [[200, 150], [220, 100], [270, 220], [300, 180]], 1, 500
+        200,
+        150,
+        2000,
+        True,
+        200,
+        300,
+        180,
+        True,
+        [[200, 150], [220, 100], [270, 220], [300, 180]],
+        1,
+        500,
     )
-    beatmap = Beatmap(objects=objects, timing=[(0, 500, False)])
+    beatmap = Beatmap(
+        objects=objects, timing=[TimingPoint(0, 500, meter=4, meter_confidence=1, bar_origin=0)]
+    )
     events, _ = pack_events(beatmap, len(mel))
+    labels = frame_labels(beatmap, len(mel))
+    plan, plan_mask = plan_targets(events, labels, beatmap.timing)
     item = {
         "mel": mel,
         "summary": summary_features(mel),
         "events": events,
-        "labels": frame_labels(beatmap, len(mel)),
+        "labels": labels,
+        "timing": beatmap.timing,
+        "plan_targets": plan,
+        "plan_mask": plan_mask,
         "condition": np.full(8, 0.5, np.float32),
     }
     values = make_example(item, 0, np.arange(len(events)), 1)

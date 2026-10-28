@@ -218,8 +218,8 @@ def train(settings, context):
                 model, validation, settings["batch_size"], selected_device, context, weight
             )
             train_terms = meter.values()
-            # Auxiliary context loss is reported separately; retain comparable base curves.
-            train_loss = sum(value for key, value in train_terms.items() if key != "context")
+            # Auxiliary context/plan losses stay separate from comparable base curves.
+            train_loss = meter.value()
             metric = {
                 "epoch": epoch,
                 "performance": performance,
@@ -281,7 +281,9 @@ def train(settings, context):
             )
             metadata["heldout_test"] = {"loss": loss, **quality}
         if test or validation:
-            suite = evaluate_suite(model, test or validation, selected_device, context)
+            suite = evaluate_suite(
+                model, test or validation, selected_device, context, include_full_song=True
+            )
             metadata["free_generation_suite"] = {
                 **suite,
                 "split": "test" if test else "validation",

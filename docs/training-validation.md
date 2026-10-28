@@ -41,3 +41,43 @@ Diese sechs kurzen Läufe dienen einer exploratorischen Regressionseinschätzung
 ## Einordnung
 
 Überwachtes Lernen aus Audio und guten Referenzmaps, musikalischer Kontext und kausale Objektfolgen sind eine sinnvolle Grundlage. Die Änderungen verbessern Steuerbarkeit und Fehlerdiagnose. Sie belegen weder Spitzenqualität noch Gleichwertigkeit mit erfahrenen Mappern. Hauptgrenzen bleiben die zweistufige Zeit-/Objektplanung, Viersekunden-Dichtebudgets, eingeschränkte Sliderdarstellung und überwiegend referenzbasierte Vorgeschichte. Vor weiterem Architekturumbau sollten vollständige neue Songs mit gleichem Modell/Seed/Parametern gespielt und Rhythmus, Bewegungen sowie Reparaturhäufigkeit getrennt bewertet werden.
+
+## Nachtrag 28. Oktober 2026: historischer v3-Vergleich und neuer v5-Stand
+
+Die obenstehenden Änderungen, Messwerte und 68 Prüfungen beschreiben den
+**historischen v3-Stand vom 27. Oktober**. Dessen A/B/C-Bezeichnung meint die drei
+Varianten der Trainingssteuerung und ist nicht mit dem neuen Architekturvergleich
+A (bisherige Inferenz), B (neue Inferenz mit denselben v3-Gewichten) und C (neue
+Repräsentation mit neu trainierten Gewichten) gleichzusetzen. Die alten Zahlen
+bleiben als Messergebnis erhalten; sie validieren keine neuen v5-Komponenten.
+
+Der aktuelle [Architekturstand](architecture.md) ist `phrase-mapper-v5`, Format 5,
+Targetschema `musical-plan-targets-v3` und Cachemanifest 3. Er verwendet explizite
+musikalische Querymerkmale mit Unsicherheitsmasken, einen kleinen Planhead auf
+vorhandenen Songtokens, zusammenhängende Rhythmusauswahl und begrenzte gemeinsame
+Zeit-/Sliderplanung. Feste Viersekundenbudgets der Inferenz entfallen; das
+Viersekunden-Dichtetarget bleibt vorerst als vorhandene Trainingshüllkurve.
+Freie Diagnostik prüft feste spätere Abschnitte und begrenzte Vollsongs anstelle
+reiner Präfixe. [Entscheidungen und offene Punkte](architecture-roadmap.md).
+
+Der neue Kontextbewerter erhält strukturgleiche, geometrisch plausible
+Kontrafaktuale mit schwachen Präferenzen. Das weiterhin ausgeschaltete
+Eigenkontexttraining lernt unter veränderter Historie nur Typ, Dauer, Repeats und
+Combo; die damalige zusätzliche absolute Geometriesupervision entfällt. Plan-
+und Kontextverluste bleiben außerhalb der Checkpoint-Auswahlmetrik der zwölf
+Hauptziele. Technische Tests dieser Änderungen sind im
+[Zeit-/Planbericht](musical-time.md) und im Umsetzungsregister dokumentiert.
+
+Der neue C-Vergleich über `scripts/benchmarks/architecture_training.py` ist mit
+zehn Läufen (fünf Varianten, zwei Seeds) abgeschlossen. Er trennt Sekundenbasis, musikalische
+Zeit, Plan, Kontextbewerter und Eigenkontexttraining mit gleichen Songgruppen,
+Parameterkapazitäten, Updatebudgets und mehreren Seeds. Ausgangspunkt sind neue
+Gewichte; es gibt keine v3-Konverter. Ein Code-Snapshot und Dateihashes sichern
+den Versuchsstand. Der bisherige v3-Gewichtsstand hat ein anderes Trainingsbudget
+und ist deshalb kein fairer Qualitätsranglistenvergleich mit den kurzen C-Läufen.
+
+Vollständige neue Ergebnisse und Einschränkungen werden ausschließlich im
+[Architektur-Evaluationsbericht](architecture-evaluation.md) zusammengeführt.
+Der vorhandene Korpus enthält keinen frischen unexponierten Abschlusstestsatz;
+historische Testgruppen werden nicht umetikettiert. Menschliche Bewertungen
+bleiben bis zu tatsächlich durchgeführten verblindeten Playtests offen.

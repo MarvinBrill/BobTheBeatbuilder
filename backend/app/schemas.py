@@ -1,5 +1,6 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+import math
+from pydantic import BaseModel, Field, root_validator
 
 Device = Literal["cpu", "cuda", "directml"]
 
@@ -32,7 +33,31 @@ class TrainRequest(BaseModel):
     device: Device = "cpu"
 
 
+class ManualTimingPoint(BaseModel):
+    time: float = Field(ge=-60000, le=1200000, allow_inf_nan=False)
+    beat_length: float = Field(ge=150, le=3000, allow_inf_nan=False)
+    meter: Optional[int] = Field(default=None, ge=1, le=32)
+    bar_origin: Optional[float] = Field(default=None, ge=-60000, le=1200000, allow_inf_nan=False)
+
+    @root_validator(skip_on_failure=True)
+    def metric_evidence(cls, values):
+        origin, meter = values["bar_origin"], values["meter"]
+        if origin is not None and meter is None:
+            raise ValueError("A bar origin requires an explicit meter")
+        if origin is not None:
+            bars = (origin - values["time"]) / (values["beat_length"] * meter)
+            if not math.isclose(bars, round(bars), abs_tol=1e-7):
+                raise ValueError(
+                    "Bar origin must agree with the red timing point modulo whole measures"
+                )
+        return values
+
+
 class GenerateRequest(BaseModel):
+    motifs: bool = False
+    timing_points: list[ManualTimingPoint] = Field(default_factory=list, max_items=256)
+    trace: bool = False
+    lookahead: bool = False
     spacing: float = Field(default=0.3, ge=0, le=1)
     flow: float = Field(default=0.5, ge=0, le=1)
     temperature: float = Field(default=0.8, ge=0.1, le=1.5)
@@ -54,3 +79,12 @@ class GenerateRequest(BaseModel):
     snap: bool = True
     divisor: Literal[1, 2, 3, 4, 6, 8] = 4
     device: Device = "cpu"
+
+    @root_validator(skip_on_failure=True)
+    def ordered_timing(cls, values):
+        points = values["timing_points"]
+        if any(right.time <= left.time for left, right in zip(points, points[1:])):
+            raise ValueError("Manual timing points must be strictly ordered")
+        if points and values["bpm"] is not None:
+            raise ValueError("Supply either complete timing points or a constant BPM")
+        return values

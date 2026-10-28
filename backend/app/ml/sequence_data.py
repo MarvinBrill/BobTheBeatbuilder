@@ -4,6 +4,7 @@ from uuid import uuid4
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 from ..beatmaps import parse
+from ..timing import red_points
 from ..library import digest
 from ..config import DATA
 from .audio import features, FRAME_MS
@@ -12,6 +13,7 @@ from .network import conditions
 from .split import song_groups
 from .movement import history_context, motion_numpy
 from . import preparation_cache
+from .phrase_plan import plan_targets
 
 # Packed event rows: time, geometry(8), kind, seconds, duration class, repeat class,
 # combo, geometry mask, previous event(16), motion context(8), movement(8).
@@ -147,9 +149,10 @@ def frame_labels(beatmap, frame_count):
         * 1000
         / FRAME_MS
     ) / np.log(11)
-    timing = [(time, beat) for time, beat, inherited in beatmap.timing if not inherited]
-    for index, (offset, beat) in enumerate(timing):
-        end = timing[index + 1][0] if index + 1 < len(timing) else frame_count * FRAME_MS
+    timing = red_points(beatmap.timing)
+    for index, point in enumerate(timing):
+        offset, beat = point.time, point.beat_length
+        end = timing[index + 1].time if index + 1 < len(timing) else frame_count * FRAME_MS
         left, right = max(0, int(np.ceil(offset / FRAME_MS))), min(
             frame_count, int(np.ceil(end / FRAME_MS))
         )
@@ -200,6 +203,7 @@ def prepare_serial(records, context, issues=None):
             beatmap = parse(map_path)
             events, masked = pack_events(beatmap, len(mel))
             labels = frame_labels(beatmap, len(mel))
+            plan, plan_mask = plan_targets(events, labels, red_points(beatmap.timing))
             info, diff = beatmap.info(), beatmap.difficulty
             params = {
                 "ar": diff.get("ApproachRate", diff.get("OverallDifficulty", 5)),
@@ -220,8 +224,15 @@ def prepare_serial(records, context, issues=None):
             prepared.append(
                 {
                     "mel": mel,
-                    "events": cached_array(f"phrase-events-v3-final-{key}.npy", events),
-                    "labels": cached_array(f"phrase-labels-v3-{key}.npy", labels),
+                    "events": cached_array(preparation_cache.paths(key)[1]["events"].name, events),
+                    "labels": cached_array(preparation_cache.paths(key)[1]["labels"].name, labels),
+                    "timing": red_points(beatmap.timing),
+                    "plan_targets": cached_array(
+                        preparation_cache.paths(key)[1]["plan_targets"].name, plan
+                    ),
+                    "plan_mask": cached_array(
+                        preparation_cache.paths(key)[1]["plan_mask"].name, plan_mask
+                    ),
                     "summary": summary,
                     "condition": np.array(conditions(params), np.float32),
                     "song": groups[index],

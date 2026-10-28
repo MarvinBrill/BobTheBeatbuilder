@@ -7,7 +7,7 @@ from safetensors.torch import load_file
 from . import store
 from .config import DATA
 from .ml.phrase_model import create_model
-from .ml.architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, ModelConfig
+from .ml.architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA, ModelConfig
 
 
 def import_model(path, context):
@@ -22,7 +22,9 @@ def import_model(path, context):
                 "metadata.json",
                 "model.safetensors",
             }:
-                raise ValueError("Expected a Bob model ZIP containing metadata.json and model.safetensors")
+                raise ValueError(
+                    "Expected a Bob model ZIP containing metadata.json and model.safetensors"
+                )
             if sum(item.file_size for item in entries) > 256 * 1024 * 1024:
                 raise ValueError("Model bundle exceeds 256 MiB unpacked")
             metadata = json.loads(archive.read("metadata.json"))
@@ -31,6 +33,7 @@ def import_model(path, context):
                 or metadata.get("architecture") != ARCHITECTURE
                 or metadata.get("format_version") != FORMAT_VERSION
                 or metadata.get("event_schema") != EVENT_SCHEMA
+                or metadata.get("target_schema") != TARGET_SCHEMA
             ):
                 raise ValueError("Unsupported model architecture or format version")
             weights_path = directory / "model.safetensors"
@@ -38,11 +41,14 @@ def import_model(path, context):
         context.report(0.5, "Validating model tensor shapes and values")
         weights = load_file(str(weights_path))
         if any(
-            tensor.dtype != torch.float32 or not torch.isfinite(tensor).all() for tensor in weights.values()
+            tensor.dtype != torch.float32 or not torch.isfinite(tensor).all()
+            for tensor in weights.values()
         ):
             raise ValueError("Model contains invalid tensor types or values")
         config = ModelConfig.from_dict(metadata.get("model_config"))
-        create_model(metadata["architecture"], config.dictionary()).load_state_dict(weights, strict=True)
+        create_model(metadata["architecture"], config.dictionary()).load_state_dict(
+            weights, strict=True
+        )
         model = {
             "id": identifier,
             "name": str(metadata.get("name", "Imported model"))[:100],
@@ -50,6 +56,7 @@ def import_model(path, context):
             "format_version": FORMAT_VERSION,
             "model_config": config.dictionary(),
             "event_schema": EVENT_SCHEMA,
+            "target_schema": TARGET_SCHEMA,
             "created_at": store.now(),
             "maps": max(0, int(metadata.get("maps", 0))),
             "training_songs": max(0, int(metadata.get("training_songs", 0))),
