@@ -188,6 +188,14 @@ Idle tabs check status every 30 seconds, active tasks every 2.5 seconds. Unchang
 
 This is a **local, single-user app** without multi-user authentication. Keep it bound to localhost.
 
+## Preview sounds
+
+The playfield preview has separate, remembered volume controls for music and hit/slider sounds. It plays circle hits, slider heads, repeats, tails, ticks and a looping slide sample, synchronized to the exported map. Pause, buffering and seeking stop or reschedule the sounds. This is automatic preview playback, not interactive hit judgement.
+
+Samples are read directly from an installed lazer skin in the configured osu! data folder. The default search is `ssM4in`; if several names match, the currently selected matching osu! skin is preferred. No skin audio is bundled in this repository or copied into generated beatmaps. The reader opens a temporary private database snapshot under `data/snapshots` and removes it afterwards; sound mappings are kept in memory.
+
+To select another skin, set `BOB_PREVIEW_SKIN` to its full name in `.env` for Docker Compose, or `$env:BOB_PREVIEW_SKIN = "Your skin name"` before starting natively. Restart the app after changing the skin configuration. Generated maps currently use the Soft sample set at 70% map volume; missing Soft samples fall back to the skin's Normal set, while explicitly empty samples remain silent. If the skin is unavailable, music playback still works and the preview displays a notice. Update an existing native installation's LazerReader and frontend using the setup script when upgrading to this feature.
+
 ## Development
 
 After native setup, start the backend and Vite in separate PowerShell terminals:
@@ -211,6 +219,7 @@ $env:PIP_CACHE_DIR = "$PWD/data/cache/pip"
 & .\data\venv-cuda\Scripts\python.exe -m pip install -r backend/requirements-dev.txt
 & .\data\venv-cuda\Scripts\python.exe -B -m pytest tests -q -p no:cacheprovider --basetemp=data/tests/manual
 node --test frontend/src/features/useStatePolling.test.cjs
+node --test frontend/src/components/PreviewSoundPlayer.test.cjs
 npm --prefix frontend run build
 ```
 
@@ -230,6 +239,7 @@ Detailed implementation and measurement notes are currently in German:
 ## References and acknowledgements
 
 - [osu! beatmap file format](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_%28file_format%29) and [osu!lazer](https://github.com/ppy/osu).
+- [osu! skin sounds](https://osu.ppy.sh/wiki/en/Skinning/Sounds) and [lazer slider behaviour](https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Osu/Objects/Slider.cs), used for preview sample roles and timing.
 - [BeatmapExporter reference revision](https://github.com/kabiiQ/BeatmapExporter/tree/718acc03c9a63232be6c943eb87e1212e3454b88), used to understand export behavior; this repository includes its own reader.
 - [Dance Dance Convolution](https://proceedings.mlr.press/v70/donahue17a.html) and [Mapperatorinator](https://github.com/OliBomby/Mapperatorinator), research and architecture references.
 

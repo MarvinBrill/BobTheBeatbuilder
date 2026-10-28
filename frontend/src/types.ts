@@ -147,7 +147,14 @@ export interface HitObject {
   end_x: number;
   end_y: number;
 }
+export interface PreviewSound {
+  time: number;
+  end?: number;
+  sample: "hitnormal" | "slidertick" | "sliderslide";
+  volume: number;
+}
 export interface Preview {
+  sound_events?: PreviewSound[];
   cs?: number;
   ar?: number;
   quality?: {

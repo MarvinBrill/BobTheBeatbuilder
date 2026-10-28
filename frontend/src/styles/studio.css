@@ -457,6 +457,16 @@
   flex: 1;
   min-width: 60px;
 }
+.preview-volume > span {
+  flex: 0 1 150px;
+}
+.preview-volume > svg {
+  flex-shrink: 0;
+}
+.preview-sound-status {
+  margin: 0;
+  padding: 0 17px 16px;
+}
 .preview-volume output {
   min-width: 48px;
   text-align: right;

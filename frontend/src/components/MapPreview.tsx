@@ -1,15 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Crosshair,
-  Download,
-  Play,
-  Pause,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
+import { Crosshair, Download, Play, Pause } from "lucide-react";
 import type { Output, Preview } from "../types";
 import { api } from "../api";
 import { PreviewObjects } from "./PreviewObjects";
+import { PreviewSoundPlayer } from "./PreviewSoundPlayer";
+import { PreviewVolume, usePreviewVolume } from "./PreviewVolume";
 
 export function MapPreview({
   output,
@@ -21,25 +16,63 @@ export function MapPreview({
   const [preview, setPreview] = useState<Preview | null>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [volume, setVolume] = useState(() => {
-    try {
-      const saved = localStorage.getItem("bob-preview-volume");
-      const value = saved === null ? 0.5 : Number(saved);
-      return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.5;
-    } catch {
-      return 0.5;
-    }
-  });
+  const [volume, setVolume] = usePreviewVolume("bob-preview-volume");
+  const [soundVolume, setSoundVolume] = usePreviewVolume(
+    "bob-preview-sound-volume",
+  );
+  const [soundStatus, setSoundStatus] = useState("");
+  const [loadingSounds, setLoadingSounds] = useState(false);
   const audio = useRef<HTMLAudioElement>(null);
+  const sounds = useRef<PreviewSoundPlayer | null>(null);
 
   useEffect(() => {
     if (audio.current) audio.current.volume = volume;
-    try {
-      localStorage.setItem("bob-preview-volume", String(volume));
-    } catch {
-      /* Storage may be disabled. */
-    }
   }, [volume, preview, output?.id]);
+
+  useEffect(() => {
+    setSoundStatus("");
+    setLoadingSounds(false);
+    if (!preview || !audio.current) return;
+    const player = new PreviewSoundPlayer(
+      audio.current,
+      preview.sound_events ?? [],
+      setSoundStatus,
+    );
+    sounds.current = player;
+    return () => {
+      player.dispose();
+      sounds.current = null;
+    };
+  }, [preview]);
+
+  useEffect(() => {
+    sounds.current?.setVolume(soundVolume);
+  }, [soundVolume, preview]);
+
+  async function togglePlayback() {
+    const element = audio.current;
+    const player = sounds.current;
+    if (!element) return;
+    if (!element.paused) {
+      element.pause();
+      return;
+    }
+    setLoadingSounds(true);
+    try {
+      try {
+        await player?.prepare();
+      } catch {
+        if (sounds.current === player)
+          setSoundStatus("Skin-Sounds sind in diesem Browser nicht verfügbar.");
+      }
+      if (audio.current === element && sounds.current === player)
+        await element.play();
+    } catch (error) {
+      if (sounds.current === player) onError((error as Error).message);
+    } finally {
+      if (sounds.current === player) setLoadingSounds(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -162,13 +195,8 @@ export function MapPreview({
             <button
               className="icon-button"
               aria-label={playing ? "Pause" : "Abspielen"}
-              onClick={() =>
-                playing
-                  ? audio.current?.pause()
-                  : audio.current
-                      ?.play()
-                      .catch((error) => onError(error.message))
-              }
+              disabled={loadingSounds}
+              onClick={togglePlayback}
             >
               {playing ? <Pause size={17} /> : <Play size={17} />}
             </button>
@@ -197,20 +225,17 @@ export function MapPreview({
               <Download size={17} />
             </a>
           </div>
-          <label className="preview-volume">
-            {volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-            <span>Lautstärke</span>
-            <input
-              type="range"
-              aria-label="Vorschau-Lautstärke"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(event) => setVolume(Number(event.target.value))}
-            />
-            <output>{Math.round(volume * 100)} %</output>
-          </label>
+          <PreviewVolume label="Musik" value={volume} onChange={setVolume} />
+          <PreviewVolume
+            label="Hit- & Slider-Sounds"
+            value={soundVolume}
+            onChange={setSoundVolume}
+          />
+          {soundStatus && (
+            <p className="fine-print preview-sound-status" role="status">
+              {soundStatus}
+            </p>
+          )}
         </>
       ) : (
         <div className="preview-footnote">

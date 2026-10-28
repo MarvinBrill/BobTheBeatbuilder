@@ -11,6 +11,7 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     environment:
       BOB_DEVICE: directml
+      BOB_PREVIEW_SKIN: ${BOB_PREVIEW_SKIN:-ssM4in}
       LD_LIBRARY_PATH: /usr/lib/wsl/lib
     devices:
       - /dev/dxg:/dev/dxg

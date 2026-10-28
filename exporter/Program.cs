@@ -3,9 +3,9 @@ using System.Text.RegularExpressions;
 using Realms;
 
 // Only reads a caller-created snapshot. No network, extraction, or game writes.
-if (args.Length != 1 || !File.Exists(args[0]))
+if (args.Length is < 1 or > 2 || !File.Exists(args[0]) || (args.Length == 2 && args[1] != "--skins"))
 {
-    Console.Error.WriteLine("Usage: LazerReader <snapshot/client.realm>");
+    Console.Error.WriteLine("Usage: LazerReader <snapshot/client.realm> [--skins]");
     return 2;
 }
 
@@ -20,6 +20,30 @@ try
     using var realm = OpenSnapshot(configuration);
     using var output = new Utf8JsonWriter(Console.OpenStandardOutput());
     output.WriteStartArray();
+
+    if (args.Length == 2)
+    {
+        foreach (dynamic skin in realm.DynamicApi.All("Skin"))
+        {
+            if ((bool)skin.DeletePending || (bool)skin.Protected) continue;
+            output.WriteStartObject();
+            output.WriteString("id", ((Guid)skin.ID).ToString());
+            output.WriteString("name", (string)skin.Name);
+            output.WriteStartArray("files");
+            foreach (dynamic entry in skin.Files)
+            {
+                output.WriteStartObject();
+                output.WriteString("name", (string)entry.Filename);
+                output.WriteString("hash", (string)entry.File.Hash);
+                output.WriteEndObject();
+            }
+            output.WriteEndArray();
+            output.WriteEndObject();
+        }
+        output.WriteEndArray();
+        output.Flush();
+        return 0;
+    }
 
     foreach (dynamic set in realm.DynamicApi.All("BeatmapSet"))
     {

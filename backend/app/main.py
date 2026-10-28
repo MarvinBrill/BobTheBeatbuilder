@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .api import router
 from .storage_api import router as storage_router
+from .preview_skin import router as preview_skin_router
 
 app = FastAPI(title="BobTheBeatbuilder", version="0.1.0")
 app.add_middleware(
@@ -48,6 +49,7 @@ async def inaccessible_path(request, error):
 
 app.include_router(router)
 app.include_router(storage_router)
+app.include_router(preview_skin_router)
 frontend = Path(
     os.getenv("BOB_FRONTEND", Path(__file__).resolve().parents[2] / "frontend" / "dist")
 )

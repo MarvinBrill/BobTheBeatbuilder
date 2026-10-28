@@ -289,10 +289,15 @@ def download_output(identifier: str):
 
 @router.get("/outputs/{identifier}/preview")
 def preview(identifier: str):
+    from .preview_sounds import sound_events
+
     item = store.get("output", identifier)
     if "preview_path" not in item:
         raise HTTPException(404, "No preview for library exports")
-    return json.loads(Path(item["preview_path"]).read_text(encoding="utf-8"))
+    path = Path(item["preview_path"])
+    result = json.loads(path.read_text(encoding="utf-8"))
+    result["sound_events"] = sound_events(path.parent / "map.osu")
+    return result
 
 
 @router.get("/outputs/{identifier}/audio")

@@ -8,6 +8,7 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     environment:
       BOB_DEVICE: cuda
+      BOB_PREVIEW_SKIN: ${BOB_PREVIEW_SKIN:-ssM4in}
     volumes:
       - type: bind
         source: ./data
