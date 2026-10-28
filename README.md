@@ -148,6 +148,7 @@ Compact has approximately **2.3M** parameters and Large **33.4M**. More capacity
 - Free validation examines up to three fixed song excerpts with at most 256 objects each, at epoch 1, every five epochs, and at the end. It uses the model's own generated history and does not replace full-song playtests.
 - Resuming requires the same unchanged dataset and local optimizer checkpoint. The learning-rate controller is retained, and the requested epochs are an additional budget. Interrupted epochs restart; the random sequence is not resumed bit-for-bit.
 - Preparation uses two CPU workers and verified caches. `BOB_PREPARE_WORKERS=1` forces serial preparation; up to `4` workers are supported. Clearing or evicting caches increases preparation work on the next run.
+- Library scans and archive imports parse beatmaps in parallel worker processes (CPU cores − 1, at most 8), hash each audio file once on background threads and save all maps in one database transaction. `BOB_IMPORT_WORKERS=1` forces serial parsing.
 
 ## Architecture and current limits
 
