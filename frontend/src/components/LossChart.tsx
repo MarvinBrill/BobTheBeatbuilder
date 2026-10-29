@@ -70,19 +70,15 @@ export function LossChart({ metrics }: { metrics: Metric[] }) {
         aria-label="Trainings- und Validierungsverlust pro Epoche"
       >
         {[20, 60, 100, 140, 180].map((y) => (
-          <line key={y} x1="20" y1={y} x2="560" y2={y} stroke="#ffffff10" />
+          <line key={y} x1="20" y1={y} x2="560" y2={y} className="chart-gridline" />
         ))}
         <polyline
           points={points("train_loss")}
-          fill="none"
-          stroke="#ee9bc6"
-          strokeWidth="3"
+          className="chart-line train"
         />
         <polyline
           points={points("validation_loss")}
-          fill="none"
-          stroke="#9ca8f6"
-          strokeWidth="3"
+          className="chart-line validation"
         />
         {metrics.map((metric, index) => (
           <circle
@@ -90,23 +86,23 @@ export function LossChart({ metrics }: { metrics: Metric[] }) {
             cx={20 + (index / Math.max(1, metrics.length - 1)) * 540}
             cy={height(metric.train_loss)}
             r="3"
-            fill="#ee9bc6"
+            className="chart-point"
           />
         ))}
-        <text x="20" y="205" fill="#9993aa" fontSize="13">
+        <text x="20" y="205" className="chart-axis">
           Epoche {metrics[0].epoch}
         </text>
-        <text x="510" y="205" fill="#9993aa" fontSize="13">
+        <text x="510" y="205" className="chart-axis">
           {metrics.at(-1)?.epoch}
         </text>
       </svg>
       <div className="chart-legend">
-        <span>● Training</span>
-        <span>● Validierung</span>
+        <span>Training</span>
+        <span>Validierung</span>
       </div>
       {separate && group !== "total" && (
         <p className="fine-print">
-          Zuletzt: Training {metrics.at(-1)?.train_loss.toFixed(4)} ·
+          Zuletzt: Training {metrics.at(-1)?.train_loss.toFixed(4)},
           Validierung {metrics.at(-1)?.validation_loss?.toFixed(4) ?? "—"}.
           Kleinere Werte sind besser.
           {group === "geometry"

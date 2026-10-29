@@ -1,85 +1,305 @@
-.toast {
+/* Toasts: one corner, newest at the bottom, nothing else moves. */
+.toast-region {
   position: fixed;
-  bottom: 25px;
-  right: 25px;
-  max-width: 560px;
-  background: #382331f5;
-  border: 1px solid #c97b9260;
-  border-radius: 12px;
-  box-shadow: 0 10px 45px #0007;
+  right: 24px;
+  bottom: 24px;
+  z-index: 50;
   display: flex;
-  gap: 20px;
-  padding: 20px;
-  z-index: 30;
-  backdrop-filter: blur(20px);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  width: min(420px, calc(100% - 32px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--color-surface-3);
+  animation: toast-in var(--dur-long) var(--ease-out);
+}
+.toast.leaving {
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 180ms var(--ease-in),
+    transform 180ms var(--ease-in);
+}
+.toast-icon {
+  margin-top: 1px;
+  color: var(--color-info);
+}
+.toast.success .toast-icon {
+  color: var(--color-success);
+}
+.toast.error {
+  background: var(--color-error-surface);
+  border-color: color-mix(in srgb, var(--color-error) 40%, transparent);
+}
+.toast.error .toast-icon,
+.toast.error b {
+  color: var(--color-error);
 }
 .toast b {
+  display: block;
   font-size: 14px;
-  color: #edb6c6;
+  font-weight: 600;
+  color: var(--color-ink);
 }
 .toast p {
   font-size: 13px;
-  line-height: 1.7;
-  margin-top: 8px;
-  color: #c4a5b7;
+  line-height: 1.6;
+  margin-top: 4px;
+  color: var(--color-ink-2);
   overflow-wrap: anywhere;
 }
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: #08060cbb;
-  backdrop-filter: blur(8px);
-  display: grid;
-  place-items: center;
-  padding: 24px;
+.toast-action {
+  display: inline-flex;
+  margin-top: 10px;
+  padding: 0;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
+.toast-action:hover {
+  color: var(--color-ink);
+}
+.toast .icon-button {
+  width: 28px;
+  height: 28px;
+  position: relative;
+}
+.toast .icon-button::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Help: a native dialog, so Escape, focus trap and backdrop come for free. */
 .help-modal {
-  max-width: 610px;
-  background: #211b2b;
+  margin: auto;
+  width: min(610px, calc(100% - 32px));
+  max-height: min(85dvh, 44rem);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+}
+.help-modal[open] {
+  animation: dialog-in var(--dur-long) var(--ease-out);
+}
+.help-modal::backdrop,
+.delete-dialog::backdrop {
+  background: color-mix(in srgb, var(--color-paper) 80%, transparent);
 }
 .help-modal ol {
   padding-left: 20px;
-  color: #bda9c9;
+  color: var(--color-ink-2);
   font-size: 15px;
-  line-height: 2.2;
+  line-height: 1.8;
 }
 .help-modal li {
-  padding: 7px 0;
+  padding: 4px 0;
 }
 .help-modal .muted {
   margin-bottom: 0;
 }
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* Why a control is disabled, or what it is doing. */
+.action-hint {
+  margin-top: 8px;
+  min-height: 1lh;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-ink-3);
+}
+.action-hint.error {
+  color: var(--color-error);
+}
+.action-hint .text-button.inline {
+  display: inline;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.progress-line {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--color-ink-3);
+  text-align: left;
+}
+.progress-line > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+.progress-line b {
+  font-weight: 500;
+  color: var(--color-ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dropzone .progress-line {
+  max-width: 320px;
+}
+
+/* Failed loads: what broke, and the one thing to do about it. */
+.inline-error {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-error-surface) 70%, transparent);
+  color: var(--color-error);
+}
+.inline-error > div {
+  flex: 1;
+  min-width: 0;
+}
+.inline-error b {
+  font-size: 14px;
+  font-weight: 600;
+}
+.inline-error p {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--color-ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* Skeletons in the shape of what is coming. */
+.skeleton-row i,
+.skeleton-block i {
+  display: block;
+  height: 12px;
+  width: 48px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-ink) 7%, transparent);
+  animation: pulse 1.4s var(--ease-out) infinite alternate;
+}
+.skeleton-row i.wide,
+.skeleton-block i.wide {
+  width: min(260px, 100%);
+}
+.skeleton-row i.short,
+.skeleton-block i.short {
+  width: 140px;
+  margin-top: 8px;
+}
+@keyframes pulse {
+  to {
+    opacity: 0.45;
+  }
+}
+.table-scroll.stale {
+  opacity: 0.55;
+  transition: opacity var(--dur-short) var(--ease-out);
+}
+
+/* Connection state, the only dots on the page. */
+.status-dot.connecting {
+  background: var(--color-warning);
+  box-shadow: none;
+}
+.status-dot.offline {
+  background: var(--color-error);
+  box-shadow: none;
+}
+
+.job-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--color-error);
+}
+.danger-button.small,
+.secondary.small {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.tag.status-running,
+.tag.status-queued {
+  color: var(--color-accent);
+}
+.tag.status-completed {
+  color: var(--color-success);
+}
+.tag.status-failed,
+.tag.status-interrupted {
+  color: var(--color-error);
+}
+.secondary.is-saved {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+}
+.blocked-note {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--color-warning);
+}
+.muted-value {
+  color: var(--color-muted);
+}
 
 .delete-dialog {
   margin: auto;
-  width: min(540px, calc(100vw - 32px));
+  width: min(540px, calc(100% - 32px));
   max-height: calc(100dvh - 32px);
   overflow: auto;
   padding: 28px;
-  border: 1px solid #d49bbf55;
+  border: 1px solid color-mix(in srgb, var(--color-rose) 33.3%, transparent);
   border-radius: 18px;
-  background: #211b2bf5;
-  color: #eeebf4;
-  box-shadow: 0 24px 80px #0008;
-}
-.delete-dialog::backdrop {
-  background: #08060cbb;
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--color-surface-2) 96.1%, transparent);
+  color: var(--color-ink);
+  box-shadow: 0 24px 80px color-mix(in srgb, var(--color-shadow) 53.3%, transparent);
 }
 .delete-dialog p {
   margin-top: 14px;
-  color: #bbb0ca;
+  color: var(--color-ink-25);
   line-height: 1.6;
   font-size: 14px;
   overflow-wrap: anywhere;
 }
 .delete-dialog .delete-name {
-  color: #f3bad6;
+  color: var(--color-accent-light);
   font-weight: 600;
 }
 .delete-dialog .delete-error {
-  color: #ffb6bb;
+  color: var(--color-error-light);
 }
 .dialog-actions,
 .artifact-actions {
@@ -96,25 +316,28 @@
   flex-shrink: 0;
 }
 .icon-button.delete-button {
-  color: #e8a2af;
+  color: var(--color-error);
 }
 .icon-button.delete-button:hover:not(:disabled) {
-  background: #a73e5338;
+  background: color-mix(in srgb, var(--color-error-hover) 22%, transparent);
 }
 .danger-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: #8e354b;
-  border: 1px solid #d3758c;
+  background: var(--color-error-strong);
+  border: 1px solid var(--color-error-mid);
   border-radius: 8px;
   padding: 11px 16px;
-  color: #fff0f4;
+  color: var(--color-ink);
   font-size: 14px;
 }
 .danger-button:hover:not(:disabled) {
-  background: #a03d55;
+  background: var(--color-error-hover);
+}
+.danger-button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .model-footer {
   flex-wrap: wrap;

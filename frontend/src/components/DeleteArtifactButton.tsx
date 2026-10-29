@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LoaderCircle, Trash2 } from "lucide-react";
 import { deleteArtifact } from "../api";
+import { useToast } from "./Toasts";
 
 export function DeleteArtifactButton({
   kind,
@@ -19,6 +20,7 @@ export function DeleteArtifactButton({
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useId();
   const description = useId();
+  const { notify } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const label = kind === "model" ? "Modell" : "Beatmap";
@@ -29,6 +31,11 @@ export function DeleteArtifactButton({
     try {
       await deleteArtifact(kind, identifier);
       dialog.current?.close();
+      notify({
+        tone: "success",
+        title: `${label} gelöscht`,
+        message: `„${name}“ wurde von der Festplatte entfernt.`,
+      });
       onDeleted();
     } catch (reason) {
       setError((reason as Error).message);
@@ -40,6 +47,7 @@ export function DeleteArtifactButton({
   return (
     <>
       <button
+        type="button"
         className="icon-button delete-button"
         aria-label={`${label} „${name}“ löschen`}
         title={
@@ -53,7 +61,7 @@ export function DeleteArtifactButton({
           dialog.current?.showModal();
         }}
       >
-        <Trash2 size={17} />
+        <Trash2 size={17} aria-hidden="true" />
       </button>
       {createPortal(
         <dialog
@@ -96,6 +104,7 @@ export function DeleteArtifactButton({
           )}
           <div className="dialog-actions">
             <button
+              type="button"
               autoFocus
               className="secondary"
               disabled={busy}
@@ -104,7 +113,9 @@ export function DeleteArtifactButton({
               Abbrechen
             </button>
             <button
+              type="button"
               className="danger-button"
+              aria-busy={busy}
               disabled={busy || blocked}
               onClick={() => void remove()}
             >

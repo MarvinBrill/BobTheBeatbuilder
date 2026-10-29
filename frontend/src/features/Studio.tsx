@@ -1,12 +1,31 @@
-import { useState } from "react";
-import { AudioLines, ArrowUpRight, Sparkles, Upload } from "lucide-react";
-import { api, upload } from "../api";
+import { useEffect, useState } from "react";
+import {
+  AudioLines,
+  ArrowUpRight,
+  Check,
+  LoaderCircle,
+  Sparkles,
+  Upload,
+} from "lucide-react";
+import { acceptsFile, api, upload } from "../api";
+import { ActionHint, BusyIcon, ProgressLine, useDropTarget } from "../components/Feedback";
+import { isActive } from "./jobs";
+import { usePendingJob } from "./usePendingJob";
 import { Slider } from "../components/Controls";
 import { StudioAdvanced, defaultAdvanced } from "./StudioAdvanced";
 import { MapPreview } from "../components/MapPreview";
 import type { Device, Hardware, State } from "../types";
 import { GeneratedMaps } from "./GeneratedMaps";
 import { generationHelp } from "./generationHelp";
+
+const AUDIO_TYPES = [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"];
+const MAX_UPLOAD = 512 * 1024 * 1024;
+const presets = [
+  { name: "Easy", ar: 5, od: 3, density: 1.5 },
+  { name: "Normal", ar: 7, od: 5, density: 2.5 },
+  { name: "Hard", ar: 9, od: 7, density: 4 },
+  { name: "Insane", ar: 9.5, od: 9, density: 6 },
+];
 
 export function Studio({
   state,
@@ -15,6 +34,7 @@ export function Studio({
   onError,
   goLibrary,
   onDeleted,
+  shownOutput,
 }: {
   state: State;
   hardware: Hardware | null;
@@ -22,10 +42,15 @@ export function Studio({
   onError: (message: string) => void;
   goLibrary: () => void;
   onDeleted: (kind: "model" | "output", identifier: string) => void;
+  /** A finished generation to open in the preview. */
+  shownOutput?: string;
 }) {
   const [model, setModel] = useState("");
   const [audio, setAudio] = useState<{ id: string; name: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const pendingJob = usePendingJob(state.jobs);
+  const starting = submitting || pendingJob.waiting;
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("Unknown");
   const [version, setVersion] = useState("AI draft");
@@ -50,25 +75,66 @@ export function Studio({
   const deletionBlocked = state.deletion_blocked;
   const selectedOutput =
     outputs.find((output) => output.id === previewId) || outputs[0];
+  const generation = state.jobs.find(
+    (job) => job.kind === "generation" && isActive(job),
+  );
+  const duplicate = state.jobs.some(
+    (job) =>
+      job.kind === "generation" && isActive(job) && job.name === title.trim(),
+  );
+  const reason =
+    uploading !== null
+      ? "Warte, bis der Upload fertig ist."
+      : !audio
+        ? "Lade zuerst einen Track hoch."
+        : !selectedModel
+          ? "Trainiere oder importiere zuerst ein Modell."
+          : !title.trim()
+            ? "Gib dem Track einen Titel."
+            : duplicate
+              ? `Für „${title.trim()}“ läuft bereits eine Generierung.`
+              : "";
+  // The progress line under the button already says a generation is running.
+  const hint = duplicate && generation ? "" : reason;
+
+  useEffect(() => {
+    if (shownOutput) setPreviewId(shownOutput);
+  }, [shownOutput]);
+
+  const drop = useDropTarget((file) => void selectAudio(file), uploading !== null);
 
   async function selectAudio(file?: File) {
-    if (!file) return;
-    setBusy(true);
+    if (!file || uploading !== null) return;
+    if (!acceptsFile(file, AUDIO_TYPES)) {
+      onError(
+        `„${file.name}“ ist kein unterstütztes Audioformat. Erlaubt sind MP3, WAV, OGG, FLAC, M4A, AAC und OPUS.`,
+      );
+      return;
+    }
+    if (file.size > MAX_UPLOAD) {
+      onError(`„${file.name}“ ist größer als 512 MB.`);
+      return;
+    }
+    setUploading(0);
     try {
-      const value = await upload<{ id: string; name: string }>("/audio", file);
+      const value = await upload<{ id: string; name: string }>(
+        "/audio",
+        file,
+        setUploading,
+      );
       setAudio(value);
       setTitle(file.name.replace(/\.[^.]+$/, ""));
     } catch (error) {
       onError((error as Error).message);
     } finally {
-      setBusy(false);
+      setUploading(null);
     }
   }
 
   async function generate() {
-    setBusy(true);
+    setSubmitting(true);
     try {
-      await api("/generate", {
+      const job = await api("/generate", {
         model_id: selectedModel,
         audio_id: audio?.id,
         title,
@@ -79,11 +145,12 @@ export function Studio({
         ...advanced,
         bpm: advanced.bpm ? Number(advanced.bpm) : null,
       });
+      pendingJob.track(job);
       refresh();
     } catch (error) {
       onError((error as Error).message);
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   }
 
@@ -91,15 +158,15 @@ export function Studio({
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">DEIN SOUND. DEIN SPIELFELD.</div>
           <h1>
-            From beat to <em>beatmap.</em>
+            From beat to <span className="accent">beatmap.</span>
           </h1>
-          <p>Verwandle Audio mit deinem eigenen Modell in osu!-Beatmaps.</p>
+          <p>
+            Dein Sound. Dein Spielfeld. Verwandle Audio mit deinem eigenen
+            Modell in osu!-Beatmaps.
+          </p>
         </div>
-        <span className="pill">
-          <span className="status-dot" /> Local-first studio
-        </span>
+        <span className="pill">Local-first studio</span>
       </div>
       {!state.models.length && (
         <div className="onboarding">
@@ -126,31 +193,49 @@ export function Studio({
               <span className="section-number">01</span>
             </div>
             <label
-              className={`dropzone ${audio ? "loaded" : ""}`}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                void selectAudio(event.dataTransfer.files[0]);
-              }}
+              className={`dropzone ${audio ? "loaded" : ""} ${drop.dragging ? "dragging" : ""} ${uploading !== null ? "busy" : ""}`}
+              aria-busy={uploading !== null}
+              {...drop.handlers}
             >
               <input
                 type="file"
-                accept=".mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-                onChange={(event) => void selectAudio(event.target.files?.[0])}
-                disabled={busy}
+                accept={AUDIO_TYPES.join(",")}
+                aria-label="Audiodatei auswählen"
+                onChange={(event) => {
+                  void selectAudio(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+                disabled={uploading !== null}
               />
-              <div className="upload-icon">
-                <Upload size={22} />
+              <div className="upload-icon" aria-hidden="true">
+                {uploading !== null ? (
+                  <LoaderCircle size={22} className="spin" />
+                ) : audio && !drop.dragging ? (
+                  <Check size={22} />
+                ) : (
+                  <Upload size={22} />
+                )}
               </div>
               <b>
-                {busy
-                  ? "Wird vorbereitet …"
-                  : audio?.name || "Audio hier ablegen"}
+                {uploading !== null
+                  ? uploading >= 1
+                    ? "Wird vorbereitet …"
+                    : "Wird hochgeladen …"
+                  : drop.dragging
+                    ? "Loslassen zum Hochladen"
+                    : audio?.name || "Audio hier ablegen"}
               </b>
-              <p>
-                oder <span>Datei auswählen</span>
-              </p>
-              <small>MP3, WAV, OGG, FLAC & mehr · bis 512 MB</small>
+              {uploading !== null ? (
+                <ProgressLine value={uploading} label="Upload" />
+              ) : (
+                <>
+                  <p>
+                    {audio ? "Anderen Track ablegen oder " : "oder "}
+                    <span>Datei auswählen</span>
+                  </p>
+                  <small>MP3, WAV, OGG, FLAC und mehr, bis 512 MB</small>
+                </>
+              )}
             </label>
             <div className="field-row">
               <label>
@@ -193,16 +278,20 @@ export function Studio({
               </h2>
               <span className="section-number">02</span>
             </div>
-            <div className="preset-row">
-              {[
-                { name: "Easy", ar: 5, od: 3, density: 1.5 },
-                { name: "Normal", ar: 7, od: 5, density: 2.5 },
-                { name: "Hard", ar: 9, od: 7, density: 4 },
-                { name: "Insane", ar: 9.5, od: 9, density: 6 },
-              ].map((preset) => (
+            <div
+              className="preset-row"
+              role="group"
+              aria-label="Schwierigkeits-Preset"
+            >
+              {presets.map((preset) => (
                 <button
+                  type="button"
                   key={preset.name}
-                  className={params.od === preset.od ? "selected" : ""}
+                  aria-pressed={
+                    params.ar === preset.ar &&
+                    params.od === preset.od &&
+                    params.density === preset.density
+                  }
                   onClick={() =>
                     setParams({
                       ...params,
@@ -286,13 +375,24 @@ export function Studio({
               setVersion={setVersion}
             />
             <button
+              type="button"
               className="primary generate-button"
-              disabled={busy || !audio || !selectedModel || !title.trim()}
+              disabled={starting || !!reason}
+              aria-busy={starting}
+              aria-describedby="generate-hint"
               onClick={() => void generate()}
             >
-              <Sparkles size={18} /> Beatmap generieren{" "}
-              <ArrowUpRight size={18} />
+              <BusyIcon busy={starting} icon={Sparkles} size={18} />
+              {starting ? "Wird gestartet …" : "Beatmap generieren"}
+              <ArrowUpRight size={18} aria-hidden="true" />
             </button>
+            <ActionHint id="generate-hint">{hint}</ActionHint>
+            {generation && (
+              <ProgressLine
+                value={generation.progress}
+                label={`„${generation.name}“ wird generiert`}
+              />
+            )}
             <p className="fine-print">
               Erstellt einen Beatmap-Entwurf. Presets sind keine garantierten
               Sternebewertungen.
@@ -301,7 +401,7 @@ export function Studio({
         </div>
         <div className="studio-preview">
           <MapPreview output={selectedOutput} onError={onError} />
-          <div className="workflow-strip">
+          <div className="workflow-strip" aria-hidden="true">
             <span>
               <b>01</b> Audio analysieren
             </span>
@@ -325,7 +425,7 @@ export function Studio({
             }}
           />
           <div className="note">
-            <span>✦</span>
+            <span aria-hidden="true">✦</span>
             <p>
               <b>Dein Modell. Dein Stil.</b>
               <br />

@@ -1,3 +1,8 @@
+/* Hallmark · checked: 2026-10-29 · genre: atmospheric (inferred) · shape: app screen
+ * floor: see handoff · fixed: states, focus, feedback, labels, eyebrows, gradients, tokens
+ * built: the project · redesign: polish · v2.0.0 */
+/* Hallmark · waive 38iii · one accented word per screen, in the page head only · the pink word in "From beat to beatmap." is the studio's own heading voice on every screen, kept at polish depth */
+@import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/shell.css";
 @import "./styles/studio.css";

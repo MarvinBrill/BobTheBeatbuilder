@@ -13,7 +13,7 @@
 }
 .muted {
   font-size: 13px;
-  color: #91839e;
+  color: var(--color-ink-4);
   line-height: 1.8;
   margin: 15px 0;
 }
@@ -22,7 +22,7 @@
   margin-bottom: 0;
 }
 .compact > svg {
-  color: #c5a6d4;
+  color: var(--color-tint-3);
   margin-bottom: 5px;
 }
 .table-toolbar {
@@ -34,43 +34,58 @@
 }
 .count {
   font-size: 13px;
-  background: #ffffff08;
+  background: color-mix(in srgb, var(--color-white) 3.1%, transparent);
   border-radius: 5px;
   padding: 3px 7px;
   margin-left: 5px;
-  color: #aa97bb;
+  color: var(--color-ink-3);
 }
 .search-input {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 350px;
-  background: #17131f;
+  background: var(--color-paper-3);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding-left: 11px;
-  color: #7f6f8e;
+  color: var(--color-tint);
+}
+.search-input:focus-within {
+  border-color: var(--color-accent-soft);
 }
 .search-input input {
   border: 0;
   background: none;
   font-size: 13px;
 }
+.search-input input:focus-visible {
+  outline-color: transparent;
+}
+.search-input:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.search-clear {
+  margin-right: 6px;
+  width: 26px;
+  height: 26px;
+}
 .selection-bar {
   display: flex;
   align-items: center;
   gap: 20px;
   margin-bottom: 14px;
-  color: #9b89a8;
+  color: var(--color-tint);
   font-size: 12px;
   flex-wrap: wrap;
 }
 .library-filters {
   padding: 18px 20px;
   margin-bottom: 22px;
-  border: 1px solid #c69ed526;
+  border: 1px solid color-mix(in srgb, var(--color-violet) 14.9%, transparent);
   border-radius: 12px;
-  background: linear-gradient(115deg, #c18cb810, #8f9ce908);
+  background: color-mix(in srgb, var(--color-accent-soft) 5%, transparent);
 }
 .filter-heading,
 .filter-heading > span,
@@ -85,7 +100,7 @@
   margin-bottom: 18px;
 }
 .filter-heading > span {
-  color: #d8bfdc;
+  color: var(--color-ink-2);
   font-size: 14px;
   font-weight: 600;
 }
@@ -101,12 +116,12 @@
   min-width: 0;
 }
 .filter-label {
-  color: #bdabc9;
+  color: var(--color-ink-25);
   font-size: 13px;
   margin-bottom: 9px;
 }
 .filter-label svg {
-  color: #d3a2c6;
+  color: var(--color-accent-2);
 }
 .star-range {
   display: flex;
@@ -123,16 +138,16 @@
   position: absolute;
   left: 12px;
   top: 14px;
-  color: #9d8aa9;
+  color: var(--color-tint);
   font-size: 12px;
 }
 .star-range input {
   padding-left: 43px;
-  background: #17131f99;
+  background: color-mix(in srgb, var(--color-paper-3) 60%, transparent);
   font-variant-numeric: tabular-nums;
 }
 .range-separator {
-  color: #87748f;
+  color: var(--color-ink-5);
 }
 .song-filter-options {
   display: grid;
@@ -141,42 +156,42 @@
   border: 1px solid var(--border);
   padding: 4px;
   border-radius: 9px;
-  background: #17131f99;
+  background: color-mix(in srgb, var(--color-paper-3) 60%, transparent);
 }
 .song-filter-options button {
   padding: 9px 5px;
   border-radius: 6px;
   background: transparent;
-  color: #a897b5;
+  color: var(--color-ink-3);
   font-size: 13px;
   border: 1px solid transparent;
 }
 .song-filter-options button:hover {
-  background: #ffffff08;
-  color: #ead4e7;
+  background: color-mix(in srgb, var(--color-white) 3.1%, transparent);
+  color: var(--color-ink-15);
 }
 .song-filter-options button[aria-pressed="true"] {
-  background: linear-gradient(115deg, #c68ec02b, #989be31c);
-  border-color: #c69ed540;
-  color: #f0c6e2;
-  box-shadow: 0 2px 8px #00000015;
+  background: color-mix(in srgb, var(--color-accent-soft) 16%, transparent);
+  border-color: color-mix(in srgb, var(--color-violet) 25.1%, transparent);
+  color: var(--color-accent-light);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-shadow) 8.2%, transparent);
 }
 .filter-block small {
   display: block;
   font-size: 12px;
-  color: #a28dad;
+  color: var(--color-tint);
   margin-top: 9px;
 }
 .filter-explanation {
   font-size: 12px;
   line-height: 1.65;
-  color: #a18cac;
-  border-top: 1px solid #c69ed513;
+  color: var(--color-tint);
+  border-top: 1px solid color-mix(in srgb, var(--color-violet) 7.5%, transparent);
   padding-top: 12px;
   margin-top: 14px;
 }
 .filter-explanation[role="alert"] {
-  color: #f0a8b6;
+  color: var(--color-error);
 }
 @media (max-width: 1050px) {
   .filter-fields {
@@ -201,7 +216,7 @@
 }
 .star-rating {
   font-variant-numeric: tabular-nums;
-  color: #f6c283;
+  color: var(--color-star);
 }
 .checkbox-label {
   display: flex;
@@ -209,6 +224,24 @@
   align-items: center;
   gap: 7px;
   font-size: 13px;
+}
+.directory-browser button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.directory-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.directory-head > button:first-child {
+  flex: 1;
+}
+.directory-head .icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
 }
 .selection-bar > .text-button {
   margin-left: auto;
@@ -226,8 +259,7 @@ table {
 }
 th {
   font-size: 12px;
-  letter-spacing: 1px;
-  color: #8a7996;
+  color: var(--color-tint);
   font-weight: 500;
   padding: 13px 10px;
   border-top: 1px solid var(--border);
@@ -236,13 +268,13 @@ th {
 td {
   padding: 14px 10px;
   font-size: 12px;
-  color: #ae9cbc;
-  border-bottom: 1px solid #c6a9df0a;
+  color: var(--color-ink-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-violet) 3.9%, transparent);
 }
 td b {
   font-size: 14px;
   font-weight: 500;
-  color: #d9cde3;
+  color: var(--color-ink-15);
   display: block;
 }
 td small {
@@ -251,10 +283,10 @@ td small {
   margin-top: 5px;
 }
 td small span {
-  color: #bca1cf;
+  color: var(--color-tint-3);
 }
 .checked {
-  background: #bc8abe09;
+  background: color-mix(in srgb, var(--color-accent-soft) 3.5%, transparent);
 }
 .pagination {
   display: flex;
@@ -266,13 +298,19 @@ td small span {
 .pagination > span {
   margin-right: auto;
   font-size: 12px;
-  color: #8f7d9d;
+  color: var(--color-ink-4);
 }
 .dataset-action {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 13px;
   margin-top: 20px;
+}
+.dataset-action > .action-hint {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
 }
 .dataset-action label {
   flex: 1;
@@ -281,7 +319,7 @@ td small span {
   margin-top: 10px;
   max-height: 180px;
   overflow: auto;
-  background: #17131f;
+  background: var(--color-paper-3);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px;
@@ -295,8 +333,8 @@ td small span {
   text-align: left;
   padding: 8px;
   font-size: 13px;
-  color: #b8a4c8;
+  color: var(--color-tint-3);
 }
 .directory-browser button:hover {
-  background: #ffffff08;
+  background: color-mix(in srgb, var(--color-white) 3.1%, transparent);
 }

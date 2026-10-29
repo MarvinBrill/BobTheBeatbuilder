@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { HardDrive, RefreshCw, Trash2 } from "lucide-react";
-import { api } from "../api";
+import {
+  AlertCircle,
+  Check,
+  HardDrive,
+  LoaderCircle,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import { api, remove as removeRequest } from "../api";
+import { ActionHint, BusyIcon } from "../components/Feedback";
+import { useToast } from "../components/Toasts";
 import type { State } from "../types";
 
 interface Entry {
@@ -48,60 +57,80 @@ export function Storage({
 }) {
   const [report, setReport] = useState<Inventory | null>(null);
   const [limit, setLimit] = useState("1");
+  const { notify } = useToast();
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [busy, setBusy] = useState<"" | "limit" | "delete">("");
+  const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState<Entry | null>(null);
   const [failure, setFailure] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const blocked = state.deletion_blocked || !!report?.blocked;
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const next = await api<Inventory>("/storage");
       setReport(next);
       setLimit(String(next.cache_limit_gib));
     } catch (error) {
-      onError((error as Error).message);
+      setLoadError((error as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, []);
+  const limitValue = Number(limit);
+  const limitInvalid =
+    limit === "" ||
+    !Number.isFinite(limitValue) ||
+    limitValue < 0 ||
+    limitValue > 64;
+  const limitUnchanged =
+    !!report && !limitInvalid && limitValue === report.cache_limit_gib;
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(false), 2500);
+    return () => clearTimeout(timer);
+  }, [saved]);
   useEffect(() => {
     void load();
   }, [load, state.deletion_blocked]);
 
   async function saveLimit() {
-    setBusy(true);
+    setBusy("limit");
+    setSaved(false);
     try {
-      await api("/storage/settings", { cache_limit_gib: Number(limit) });
+      await api("/storage/settings", { cache_limit_gib: limitValue });
       await load();
+      setSaved(true);
     } catch (error) {
       onError((error as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
   async function remove() {
     if (!pending) return;
-    setBusy(true);
+    const entry = pending;
+    setBusy("delete");
     setFailure("");
     try {
-      const response = await fetch(
-        `/api/storage/${encodeURIComponent(pending.kind)}/${encodeURIComponent(pending.id)}`,
-        { method: "DELETE" },
+      await removeRequest(
+        `/storage/${encodeURIComponent(entry.kind)}/${encodeURIComponent(entry.id)}`,
       );
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || "Löschen fehlgeschlagen");
-      }
       dialog.current?.close();
       setPending(null);
+      notify({
+        tone: "success",
+        title: "Vom Datenträger entfernt",
+        message: `„${entry.name}“, ${size(entry.bytes)} freigegeben.`,
+      });
       refresh();
       await load();
     } catch (error) {
       setFailure((error as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
@@ -109,27 +138,38 @@ export function Storage({
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">DEINE DATEIEN. DEIN PLATZ.</div>
           <h1>
-            Dein <em>Speicher.</em>
+            Dein <span className="accent">Speicher.</span>
           </h1>
           <p>
-            Alle Dateien im data-Ordner – mit Größe und gezielter Bereinigung.
+            Deine Dateien, dein Platz. Alle Dateien im data-Ordner, mit Größe
+            und gezielter Bereinigung.
           </p>
         </div>
         <button
+          type="button"
           className="secondary"
-          disabled={loading || busy}
+          disabled={loading || !!busy}
+          aria-busy={loading}
           onClick={() => void load()}
         >
-          <RefreshCw size={17} /> Aktualisieren
+          <RefreshCw
+            size={17}
+            className={loading ? "spin" : ""}
+            aria-hidden="true"
+          />
+          {loading ? "Wird gemessen …" : "Aktualisieren"}
         </button>
       </div>
       <section className="panel storage-summary">
         <div>
-          <HardDrive size={25} />
+          <HardDrive size={25} aria-hidden="true" />
           <strong>
-            {report ? size(report.total_bytes) : "Wird gemessen …"}
+            {report
+              ? size(report.total_bytes)
+              : loadError
+                ? "Unbekannt"
+                : "Wird gemessen …"}
           </strong>
           <span>im data-Ordner</span>
         </div>
@@ -147,25 +187,52 @@ export function Storage({
               max="64"
               step="0.25"
               value={limit}
-              onChange={(event) => setLimit(event.target.value)}
+              aria-invalid={limitInvalid}
+              aria-describedby="limit-hint"
+              onChange={(event) => {
+                setLimit(event.target.value);
+                setSaved(false);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !busy &&
+                  !blocked &&
+                  !loading &&
+                  !limitInvalid &&
+                  !limitUnchanged
+                )
+                  void saveLimit();
+              }}
             />
           </label>
           <button
-            className="secondary"
+            type="button"
+            className={`secondary ${saved ? "is-saved" : ""}`}
             disabled={
-              busy ||
-              blocked ||
-              loading ||
-              limit === "" ||
-              !Number.isFinite(Number(limit)) ||
-              Number(limit) < 0 ||
-              Number(limit) > 64
+              !!busy || blocked || loading || limitInvalid || limitUnchanged
             }
+            aria-busy={busy === "limit"}
             onClick={() => void saveLimit()}
           >
-            Limit speichern
+            {busy === "limit" ? (
+              <LoaderCircle size={16} className="spin" aria-hidden="true" />
+            ) : saved ? (
+              <Check size={16} aria-hidden="true" />
+            ) : null}
+            {busy === "limit"
+              ? "Wird gespeichert …"
+              : saved
+                ? "Gespeichert"
+                : "Limit speichern"}
           </button>
         </div>
+        <ActionHint
+          id="limit-hint"
+          tone={limitInvalid ? "error" : "neutral"}
+        >
+          {limitInvalid ? "Gib einen Wert von 0 bis 64 GiB ein." : ""}
+        </ActionHint>
         <p className="fine-print">
           Automatisch nach jeder Aufgabe begrenzt; während des Trainings darf
           der Cache größer sein. 0 entfernt alle Analyse-Caches nach der
@@ -174,12 +241,41 @@ export function Storage({
           entfernbar.
         </p>
         {blocked && (
-          <p role="status">
+          <p role="status" className="blocked-note">
             Löschen und Bereinigen ist während Aufgaben oder Uploads gesperrt.
             Nach deren Ende wird die Ansicht aktualisiert.
           </p>
         )}
       </section>
+      {loadError && (
+        <div className="panel inline-error" role="alert">
+          <AlertCircle size={20} aria-hidden="true" />
+          <div>
+            <b>Der Speicher konnte nicht gemessen werden.</b>
+            <p>{loadError}</p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            <RefreshCw size={15} aria-hidden="true" /> Erneut messen
+          </button>
+        </div>
+      )}
+      {!report && loading && (
+        <section className="panel storage-group" aria-hidden="true">
+          {Array.from({ length: 3 }, (_, index) => (
+            <div className="storage-row skeleton-block" key={index}>
+              <div>
+                <i className="wide" />
+                <i className="short" />
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
       {Object.entries(groups).map(([kind, title]) => {
         const rows =
           report?.entries.filter((entry) => entry.kind === kind) || [];
@@ -198,10 +294,10 @@ export function Storage({
                   <b>{entry.name}</b>
                   <p>{entry.detail}</p>
                   <small>
-                    {entry.paths.slice(0, 2).join(" · ") ||
+                    {entry.paths.slice(0, 2).join(", ") ||
                       "Nur Katalogeinträge"}
                     {entry.paths.length > 2
-                      ? ` · und ${entry.paths.length - 2} weitere`
+                      ? ` und ${entry.paths.length - 2} weitere`
                       : ""}
                   </small>
                 </div>
@@ -210,14 +306,19 @@ export function Storage({
                   <button
                     className="icon-button delete-button"
                     aria-label={`${entry.name} löschen`}
-                    disabled={busy || blocked || loading}
+                    disabled={!!busy || blocked || loading}
+                    title={
+                      blocked
+                        ? "Zuerst laufende oder wartende Aufgaben beenden"
+                        : undefined
+                    }
                     onClick={() => {
                       setPending(entry);
                       setFailure("");
                       dialog.current?.showModal();
                     }}
                   >
-                    <Trash2 size={18} />
+                    <Trash2 size={18} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -236,7 +337,7 @@ export function Storage({
       >
         <h2 id="storage-delete-title">Endgültig vom Datenträger entfernen?</h2>
         <p className="delete-name">
-          {pending?.name} · {size(pending?.bytes || 0)}
+          {pending?.name} ({size(pending?.bytes || 0)})
         </p>
         <div id="storage-delete-detail">
           <p>{pending?.detail}</p>
@@ -263,19 +364,23 @@ export function Storage({
         )}
         <div className="dialog-actions">
           <button
+            type="button"
             autoFocus
             className="secondary"
-            disabled={busy}
+            disabled={!!busy}
             onClick={() => dialog.current?.close()}
           >
             Abbrechen
           </button>
           <button
+            type="button"
             className="danger-button"
-            disabled={busy || blocked}
+            disabled={!!busy || blocked}
+            aria-busy={busy === "delete"}
             onClick={() => void remove()}
           >
-            {busy ? "Wird entfernt …" : "Endgültig löschen"}
+            <BusyIcon busy={busy === "delete"} icon={Trash2} />
+            {busy === "delete" ? "Wird entfernt …" : "Endgültig löschen"}
           </button>
         </div>
       </dialog>

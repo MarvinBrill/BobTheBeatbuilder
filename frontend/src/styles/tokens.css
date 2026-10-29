@@ -1,0 +1,78 @@
+:root {
+  /* Surfaces, darkest to lightest */
+  --color-paper: #101019;
+  --color-paper-2: #15141f;
+  --color-paper-3: #17141f;
+  --color-surface: #1e1c2c;
+  --color-surface-2: #211b2b;
+  --color-surface-3: #262032;
+  --color-raised: #2f263a;
+  --color-plum: #37273d;
+  --color-plum-2: #3a2445;
+  --color-plum-glow: #674171;
+  --color-night: #212652;
+  /* Text, strongest to faintest */
+  --color-ink: #eeebf4;
+  --color-ink-15: #d9cde3;
+  --color-ink-2: #c7bdd3;
+  --color-ink-25: #b5a9c2;
+  --color-ink-3: #a89ab6;
+  --color-muted: #9691a6;
+  --color-ink-4: #8c809a;
+  --color-ink-5: #7a6f88;
+  --color-ink-faint: #675f77;
+  /* Tinted greys for icons and quiet labels */
+  --color-tint: #a08cac;
+  --color-tint-2: #b394bc;
+  --color-tint-3: #bca1cf;
+  --color-tint-dim: #9c749c;
+  /* The brand pink and its family; accent-ink is text on pink */
+  --color-accent: #f6a0c8;
+  --color-accent-button: #edafd0;
+  --color-accent-light: #f4bfdc;
+  --color-accent-3: #e6acd1;
+  --color-accent-2: #d3a4ce;
+  --color-rose: #d891bc;
+  --color-violet: #c69ed5;
+  --color-accent-soft: #c18cb8;
+  --color-accent-mid: #c17dad;
+  --color-accent-dim: #b568a3;
+  --color-accent-deep-2: #8e4e9e;
+  --color-accent-deep: #77537f;
+  --color-accent-ink: #2c1b35;
+  /* The lavender partner */
+  --color-lavender: #9ca8f6;
+  --color-periwinkle: #939be6;
+  --color-lavender-dim: #4e456b;
+  /* State */
+  --color-success: #91d4b3;
+  --color-success-dim: #94c4ad;
+  --color-error-light: #ffb6bb;
+  --color-error: #f0a0ae;
+  --color-error-mid: #d3758c;
+  --color-error-hover: #a33d54;
+  --color-error-strong: #8e354b;
+  --color-error-surface: #382331;
+  --color-star: #f6c283;
+  /* Neutrals for shadows and washes */
+  --color-shadow: #06040a;
+  --color-white: #fdfbff;
+  --color-focus: var(--color-accent);
+  --color-warning: #f3c27e;
+  --color-info: #b7a3ee;
+  --color-success-surface: #1f2f2a;
+  /* Lines and panels */
+  --border: rgba(204, 191, 231, 0.11);
+  --panel: rgba(30, 28, 44, 0.72);
+  /* Older names, kept for the existing rules */
+  --pink: var(--color-accent);
+  --muted: var(--color-muted);
+  /* Type */
+  --font-body: Inter, "Segoe UI", Arial, sans-serif;
+  /* Motion: state, never decoration */
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+}

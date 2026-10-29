@@ -1,4 +1,10 @@
-import { Layers, RotateCcw, SlidersHorizontal, Star } from "lucide-react";
+import {
+  Layers,
+  Minus,
+  RotateCcw,
+  SlidersHorizontal,
+  Star,
+} from "lucide-react";
 import type { MapFilters } from "./useLibraryMaps";
 
 const songOptions = [
@@ -21,19 +27,24 @@ export function LibraryFilters({
     <div className="library-filters">
       <div className="filter-heading">
         <span>
-          <SlidersHorizontal size={17} /> Deine Trainingsauswahl
+          <SlidersHorizontal size={17} aria-hidden="true" /> Deine
+          Trainingsauswahl
         </span>
         <button
+          type="button"
           className="text-button"
+          disabled={
+            !filters.minimum && !filters.maximum && filters.perSong === "all"
+          }
           onClick={() => onChange({ minimum: "", maximum: "", perSong: "all" })}
         >
-          <RotateCcw size={13} /> Zurücksetzen
+          <RotateCcw size={13} aria-hidden="true" /> Zurücksetzen
         </button>
       </div>
       <div className="filter-fields">
         <div className="filter-block">
           <div className="filter-label">
-            <Star size={15} /> Sternebereich
+            <Star size={15} aria-hidden="true" /> Sternebereich
           </div>
           <div className="star-range">
             <label>
@@ -49,9 +60,7 @@ export function LibraryFilters({
                 onChange={(event) => onChange({ minimum: event.target.value })}
               />
             </label>
-            <span className="range-separator" aria-hidden="true">
-              —
-            </span>
+            <Minus size={14} className="range-separator" aria-hidden="true" />
             <label>
               <span>Bis</span>
               <input
@@ -69,7 +78,7 @@ export function LibraryFilters({
         </div>
         <div className="filter-block">
           <div className="filter-label">
-            <Layers size={15} /> Schwierigkeiten pro Song
+            <Layers size={15} aria-hidden="true" /> Schwierigkeiten pro Song
           </div>
           <div
             className="song-filter-options"
@@ -78,6 +87,7 @@ export function LibraryFilters({
           >
             {songOptions.map(([value, label]) => (
               <button
+                type="button"
                 key={value}
                 aria-pressed={filters.perSong === value}
                 onClick={() => onChange({ perSong: value })}
@@ -89,7 +99,7 @@ export function LibraryFilters({
           <small>
             {filters.perSong === "all"
               ? "Alle passenden Schwierigkeiten anzeigen."
-              : "Genau eine passende Map je Song – über alle Seiten."}
+              : "Genau eine passende Map je Song, über alle Seiten."}
           </small>
         </div>
       </div>
