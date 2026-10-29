@@ -7,17 +7,25 @@ from ..timing import red_points
 MUSICAL_TIME_FEATURES = 11
 
 
-def disturbed_timing(timing, rng):
+def draw_timing_disturbance(rng):
+    """Random numbers for one example's timing disturbance, drawn ahead of building it."""
+    mode = float(rng.random())
+    if mode < 0.2:
+        return mode, 0.0, 1.0
+    phase_shift = float(rng.normal(0, 12)) if mode < 0.85 else 0.0
+    tempo_scale = float(rng.uniform(0.985, 1.015)) if phase_shift else 1.0
+    return mode, phase_shift, tempo_scale
+
+
+def apply_timing_disturbance(timing, disturbance):
     """One coherent disturbance per example; never fabricate a confident bar phase."""
     points = red_points(timing)
-    if rng is None or not points:
+    if disturbance is None or not points:
         return points
-    mode = rng.random()
+    mode, phase_shift, tempo_scale = disturbance
     if mode < 0.2:
         return []
     hide_meter = mode < 0.6
-    phase_shift = float(rng.normal(0, 12)) if mode < 0.85 else 0.0
-    tempo_scale = float(rng.uniform(0.985, 1.015)) if phase_shift else 1.0
     confidence = 0.75 if phase_shift else 1.0
     return [
         replace(
@@ -33,6 +41,13 @@ def disturbed_timing(timing, rng):
         )
         for point in points
     ]
+
+
+def disturbed_timing(timing, rng):
+    points = red_points(timing)
+    if rng is None or not points:
+        return points
+    return apply_timing_disturbance(points, draw_timing_disturbance(rng))
 
 
 def musical_time_features(seconds, timing):

@@ -9,8 +9,10 @@ from ..config import DATA
 from ..timing import TimingPoint
 from .architecture import TARGET_SCHEMA, GLOBAL_TOKENS
 from .phrase_plan import PLAN_FEATURES
+from .style import FEATURE_COUNT
 
-VERSION = 3
+VERSION = 4
+EVENT_COLUMNS = 49
 
 
 def fingerprint(array):
@@ -20,14 +22,21 @@ def fingerprint(array):
 def paths(key):
     root = DATA / "cache"
     return root / f"phrase-prepared-v{VERSION}-{key}.json", {
-        "events": root / f"phrase-events-v5-{key}.npy",
+        "events": root / f"phrase-events-v6-{key}.npy",
         "labels": root / f"phrase-labels-v5-{key}.npy",
         "plan_targets": root / f"phrase-plan-v1-{key}.npy",
         "plan_mask": root / f"phrase-plan-mask-v1-{key}.npy",
     }
 
 
-def load(key, frames):
+def _vector(values, size):
+    array = np.asarray(values, dtype=np.float32)
+    if array.shape != (size,) or not np.isfinite(array).all():
+        raise ValueError("Invalid cached vector")
+    return array
+
+
+def load(key, frames, signature=""):
     manifest, files = paths(key)
     try:
         meta = json.loads(manifest.read_text(encoding="utf-8"))
@@ -35,6 +44,7 @@ def load(key, frames):
             meta["frames"] != frames
             or meta["version"] != VERSION
             or meta["target_schema"] != TARGET_SCHEMA
+            or meta.get("attribute_signature", "") != signature
         ):
             return None
         arrays = {
@@ -42,7 +52,7 @@ def load(key, frames):
         }
         if (
             arrays["events"].ndim != 2
-            or arrays["events"].shape[1] != 47
+            or arrays["events"].shape[1] != EVENT_COLUMNS
             or arrays["labels"].shape != (frames, 6)
             or arrays["plan_targets"].shape != (GLOBAL_TOKENS, PLAN_FEATURES)
             or arrays["plan_mask"].shape != (GLOBAL_TOKENS, PLAN_FEATURES)
@@ -55,9 +65,6 @@ def load(key, frames):
                 or fingerprint(array) != meta["hashes"][name]
             ):
                 return None
-        condition = np.asarray(meta["condition"], dtype=np.float32)
-        if condition.shape != (8,) or not np.isfinite(condition).all():
-            return None
         timing = [TimingPoint(**point) for point in meta["timing"]]
         if any(point.inherited for point in timing) or timing != sorted(
             timing, key=lambda point: point.time
@@ -65,8 +72,13 @@ def load(key, frames):
             return None
         return {
             **arrays,
-            "condition": condition,
+            "condition": _vector(meta["condition"], 8),
+            "style": _vector(meta["style"], FEATURE_COUNT),
+            "style_mask": _vector(meta["style_mask"], FEATURE_COUNT),
+            "mapper_candidate": meta["mapper_candidate"],
+            "creator": str(meta["creator"]),
             "timing": timing,
+            "attribute_signature": signature,
             "masked_geometry": int(meta["masked_geometry"]),
         }
     except (OSError, ValueError, KeyError, TypeError, EOFError):
@@ -81,6 +93,11 @@ def save(key, frames, prepared):
         "timing": [asdict(point) for point in prepared["timing"]],
         "frames": frames,
         "condition": prepared["condition"].tolist(),
+        "style": prepared["style"].tolist(),
+        "style_mask": prepared["style_mask"].tolist(),
+        "mapper_candidate": prepared["mapper_candidate"],
+        "creator": prepared["creator"],
+        "attribute_signature": prepared.get("attribute_signature", ""),
         "masked_geometry": prepared["masked_geometry"],
         "shapes": {name: list(prepared[name].shape) for name in paths(key)[1]},
         "hashes": {name: fingerprint(prepared[name]) for name in paths(key)[1]},

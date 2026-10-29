@@ -22,6 +22,7 @@ class ValidationMetrics:
     def __init__(self):
         self.tp = self.predicted = self.actual = 0
         self.motion_error = self.motion_count = self.type_correct = self.event_count = 0
+        self.gap_correct = self.gap_near = self.gap_count = 0
 
     def add(self, output, batch):
         probabilities = 1 / (1 + np.exp(-np.clip(output["rhythm"][:, 0].detach().cpu().numpy(), -60, 60)))
@@ -44,6 +45,13 @@ class ValidationMetrics:
         kind = output["kind"].detach().cpu().numpy().argmax(-1)
         self.type_correct += float(((kind == batch["kind_target"].detach().cpu().numpy()) * valid).sum())
         self.event_count += float(valid.sum())
+        if "gap" in output:
+            target = batch["gap_target"].detach().cpu().numpy()
+            usable = valid * (target >= 0)
+            ranked = np.argsort(-output["gap"].detach().cpu().numpy(), axis=-1)[..., :3]
+            self.gap_correct += float(((ranked[..., 0] == target) * usable).sum())
+            self.gap_near += float(((ranked == target[..., None]).any(-1) * usable).sum())
+            self.gap_count += float(usable.sum())
 
     def result(self):
         precision, recall = self.tp / max(1, self.predicted), self.tp / max(1, self.actual)
@@ -53,4 +61,12 @@ class ValidationMetrics:
             "onset_f1": 2 * precision * recall / max(1e-9, precision + recall),
             "motion_mae": self.motion_error / max(1, self.motion_count),
             "object_type_accuracy": self.type_correct / max(1, self.event_count),
+            **(
+                {
+                    "rhythm_accuracy": self.gap_correct / self.gap_count,
+                    "rhythm_top3_accuracy": self.gap_near / self.gap_count,
+                }
+                if self.gap_count
+                else {}
+            ),
         }

@@ -1,24 +1,26 @@
 :root {
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
-  color: #eeebf4;
-  background: #101019;
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  background: var(--color-paper);
   font-synthesis: none;
   font-weight: 400;
   font-size: 16px;
-  --pink: #f6a0c8;
-  --muted: #9691a6;
-  --border: rgba(204, 191, 231, 0.11);
-  --panel: rgba(30, 28, 44, 0.72);
+}
+html,
+body {
+  overflow-x: clip;
 }
 * {
   box-sizing: border-box;
 }
 body {
   margin: 0;
+  background: var(--color-paper);
 }
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 button,
@@ -31,37 +33,74 @@ summary {
 button,
 a {
   transition:
-    background 0.18s,
-    border-color 0.18s,
-    transform 0.18s;
+    background-color var(--dur-short) var(--ease-out),
+    border-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out);
 }
 button {
   cursor: pointer;
 }
-button:disabled {
-  opacity: 0.4;
+button:disabled:not([aria-busy="true"]),
+input:disabled,
+select:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
+}
+/* A busy control is working, not unavailable: its label stays readable. */
+button[aria-busy="true"] {
+  cursor: progress;
 }
 a {
   color: inherit;
   text-decoration: none;
 }
+input:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent-soft) 35%, transparent);
+}
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  color: var(--color-ink);
+}
+html {
+  scrollbar-color: var(--color-raised) var(--color-paper);
+}
 button:focus-visible,
 a:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--pink);
-  outline-offset: 4px;
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
-input:focus,
-select:focus {
-  outline: 1px solid #c896c8;
-  border-color: #bf88b2;
+[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-color: var(--color-focus);
+  border-color: var(--color-accent-soft);
+}
+input[type="checkbox"]:focus-visible,
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: var(--color-error);
 }
 h1,
 h2,
 h3,
 p {
   margin: 0;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 h2 {
   font-size: 17px;
@@ -80,14 +119,14 @@ button {
   color: inherit;
 }
 input[type="checkbox"] {
-  accent-color: #efa4d0;
+  accent-color: var(--color-accent);
   width: 15px;
   height: 15px;
   padding: 0;
   flex-shrink: 0;
 }
 input[type="range"] {
-  accent-color: #e4a1c7;
+  accent-color: var(--color-accent);
   width: 100%;
   padding: 0;
   height: 4px;
@@ -97,11 +136,16 @@ input,
 select {
   min-width: 0;
   width: 100%;
-  color: #e7e3ed;
-  background: #15141f;
+  color: var(--color-ink);
+  background: var(--color-paper-2);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 11px 12px;
+  outline: 2px solid transparent;
+  outline-offset: -3px;
+}
+input::placeholder {
+  color: var(--color-muted);
 }
 select {
   color-scheme: dark;
@@ -110,7 +154,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  color: #b8b2c5;
+  color: var(--color-ink-2);
   font-size: 14px;
   font-weight: 500;
 }
@@ -122,19 +166,23 @@ small {
   color: var(--muted);
 }
 code {
-  color: #dbb1d4;
+  color: var(--color-accent-2);
 }
 progress {
   appearance: none;
   width: 100%;
-  height: 3px;
+  height: 4px;
   border: 0;
-  border-radius: 5px;
-  background: #30283c;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-surface-3);
 }
 progress::-webkit-progress-bar {
-  background: #30283c;
+  background: var(--color-surface-3);
 }
 progress::-webkit-progress-value {
-  background: #e7a1c7;
+  background: var(--color-accent);
+}
+progress::-moz-progress-bar {
+  background: var(--color-accent);
 }

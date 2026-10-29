@@ -198,6 +198,34 @@ Wahrscheinlichkeit als Tensor. Die historischen v3-Zusatztrainingsresultate vom
 27. Oktober betreffen einen anderen Geometriehilfsverlust und validieren diese
 neue Variante nicht; siehe [Trainingsvergleiche](training-validation.md).
 
+## Stil-Conditioning v2: Sterne, Patterns, Mapper
+
+Neue Modelle (`style_version: 2` in `model_config`) ersetzen die acht festen Stilwerte durch 26 gemessene Größen mit Maske. Alle Werte stammen aus der jeweiligen Trainingsmap selbst (`backend/app/ml/style.py`):
+
+| Gruppe | Werte |
+| --- | --- |
+| Schwierigkeit | offizielles Star Rating, Aim-Anteil an Aim + Speed |
+| Einstellungen | AR, CS, OD, HP |
+| Dichte/Tempo | Objekte pro Sekunde, dominantes BPM |
+| Rhythmus | Anteil 1/4-, 1/2- und Triolen-Abstände, Bursts (3–8 Noten in 1/4-Folge), Streams (ab 9), mittlere Folgenlänge |
+| Bewegung | Median-Abstand, 1/2-Sprungweite, Stream-Abstand, Richtungsfluss, spitze Winkel (< 60°), gerade Linien (> 120°), Stacks |
+| Slider | Anteil, Tempo in px/Beat, kurze Slider (≤ 1/2 Beat), Wiederholungen |
+| Struktur | Objekte pro New Combo |
+
+Eingang des Encoders sind maskierte Werte plus Maske (52 Zahlen). Beim Training werden ganze Gruppen zufällig verborgen (Schwierigkeit 15 %, Rhythmus/Bewegung/Slider je 35 %, Struktur 50 %, Tempo 10 %, AR/CS/OD/HP nie). Dadurch funktioniert die Generierung auch, wenn nur Ziel-Sterne oder nur ein Mapper vorgegeben sind; fehlende Werte leitet das Modell aus Musik und Restvorgaben ab.
+
+**Star Rating.** `difficulty/` ist ein kleines .NET-Programm mit `ppy.osu.Game.Rulesets.Osu` (2026.1026.0, inklusive Reading-Skill und Snap/Flow-Aim aus dem Rework vom Juli 2026). Es berechnet No-Mod-Attribute für viele `.osu`-Dateien parallel und schreibt JSON-Zeilen. Import, Datensatz-Vorbereitung und Generierung nutzen dieselbe Berechnung. Ohne gebautes Programm trainiert das Modell mit maskierten Sternen und warnt.
+
+**Mapper.** Der Creator eines stable-Sets ist auch bei Gast-Difficulties eingetragen. Possessive Diff-Namen („NiNo's Insane“, „deetz' Expert“) werden deshalb dem Gast zugeordnet, bekannte Schreibweisen vereinheitlicht. Mapper mit mindestens `mapper_min_maps` Trainingsmaps (Standard 10) erhalten einen Eintrag in einer gelernten Tabelle (One-Hot-Produkt statt Embedding-Lookup, damit DirectML funktioniert); seltene Mapper und 30 % der Beispiele nutzen den neutralen Eintrag 0. Pro Mapper und pro halbem Stern speichert das Modell zusätzlich Median-Profile, mit denen die Oberfläche Regler vorbelegt.
+
+**Rhythmus-Patterns.** Jede Map liefert pro Objekt die Rhythmusklasse des Abstands zum nächsten Objekt: 26 Beat-Abstände von 1/8 bis 8 sowie „Pause“ (über 8,5 Beats). Der Decoder sieht in der Anfrage nur noch den Abstand zum vorigen Objekt (Sekunden und Beats), das Tempo und die elf Kanäle der expliziten musikalischen Zeit, nicht mehr den Abstand zum nächsten Objekt. Ein eigener Kopf sagt aus Vorgeschichte, Audio und dem gerade platzierten Objekt (Circle oder Slider samt Länge) die nächste Rhythmusklasse voraus; Verlust mit Label Smoothing 0,05 und Gewicht 0,5, als eigene Kurve „Rhythmus-Patterns“. Beim Generieren wird der nächste Zeitpunkt so gewählt: Klassenwahrscheinlichkeit plus 0,7 × log Onset-Wahrscheinlichkeit am Rasterpunkt, nur Klassen auf dem gewählten Raster (1/12 mischt 1/4 und 1/3), nicht in digitaler Stille, Slider-Ende plus ¼ Beat Abstand, optional maximale Streamlänge. Damit entstehen Triples, Bursts, Streams und 1/2-Abschnitte als zusammenhängende Folgen statt als unabhängig ausgewählte Onsets. Dieser Modus (`rhythm_mode: "patterns"`) ist für v2-Modelle Standard; mit `"onsets"` nutzen sie stattdessen die begrenzte Onset-Suche, Gelenkplanung und Vorausschau unten (mit Mapper und Stilwerten, aber ohne Rhythmus-Kopf). Modelle ohne Stil-Conditioning verwenden immer die Onset-Suche.
+
+**Gegen Overfitting.** Der Onset-Zweig bekommt in v2 Dropout (0,1) auf Transformer- und lokale Merkmale, das Mel-Spektrum bis zu zwei maskierte Frequenzbänder. Freie Validierung nutzt für v2-Modelle das Timing der Referenzmap, damit sie Patterns statt Tempoerkennung misst; die Abschnittsauswahl ist dieselbe wie bei älteren Modellen.
+
+**Kalibrierung.** Mit Ziel-Sternen misst die Generierung die fertige Map. Liegt sie mehr als 0,15 ★ daneben, werden Sterne-Vorgabe und eine Rhythmus-Tendenz nachgeregelt und neu erzeugt (bis zu fünf Runden, beste Runde gewinnt). Ältere Modelle regeln stattdessen Dichte und Abstand nach.
+
+**Startpunkt.** Ein neues Training kann Gewichte eines vorhandenen Modells übernehmen, auch eines Modells ohne Stil-Conditioning oder einer älteren Architektur (z. B. v3). Übernommen wird jeder Tensor mit passender Form; Conditioning, Mapper-Tabelle, Rhythmus-Kopf und bei älteren Architekturen auch Query-Eingang und Plan-Kopf starten neu. Fortsetzen (Resume) ist nur für v2-Stände möglich.
+
 ## CUDA-Ausführung
 
 CUDA verwendet PyTorch SDPA mit denselben Padding-/Kausalmasken; CPU und DirectML behalten die explizite Attention. Automatische Rechengenauigkeit nutzt auf geeigneter CUDA-Hardware BF16 nur im Netzvorwärtslauf. Die Ausgänge werden vor der Verlustberechnung nach Float32 zurückgewandelt; insbesondere Mischverteilungen, Bewegungsableitungen und Kontextbewertung bleiben Float32. Mastergewichte, AdamW-Zustand, Validierung und Modell-Dateien bleiben Float32. TF32 ist deaktiviert. „Float32“ in der UI ermöglicht einen Vergleich ohne BF16.
@@ -338,7 +366,8 @@ Absichtliche Tech-/Reading-Spezialmuster können durch diese unterstützte
 Stilgrenze weiterhin ausgeschlossen werden. Der Bericht nennt Formprobleme und
 Umwegquantile; weniger Guardverletzungen belegen allein keine Musikqualität.
 
-Es gibt kein offizielles Star-Rating oder Ranked-Qualitätsversprechen. Sliderpfad-
+Es gibt kein Ranked-Qualitätsversprechen; das Star Rating der fertigen Map wird bei
+verfügbarem Rechner offiziell gemessen (siehe Stil-Conditioning v2). Sliderpfad-
 Interaktionen, genaue Stackingsemantik, langfristige Ermüdung, freie Kontextfehler
 und semantische musikalische Layer sind nicht vollständig modelliert. Hitsounds,
 Storyboard, Kiai, Spinner und SliderTickRate werden nicht gelernt; exportierte

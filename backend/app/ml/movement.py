@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from functools import lru_cache
 
 SCALE = (512.0, 384.0)
@@ -45,6 +44,8 @@ def motion_numpy(geometry, duration, repeats, slider, time, context):
 
 @lru_cache(maxsize=16)
 def motion_constants(device, dtype):
+    import torch  # Lazy: batch worker processes import this module without PyTorch.
+
     # Reused constants avoid host-to-device copies in each loss and permit CUDA graph capture.
     return (
         torch.tensor(SCALE, dtype=dtype, device=device),
@@ -53,6 +54,8 @@ def motion_constants(device, dtype):
 
 
 def motion_tensor(geometry, duration, repeats, slider, time, context):
+    import torch
+
     scale, t = motion_constants(geometry.device, geometry.dtype)
     points = geometry.reshape(*geometry.shape[:-1], 4, 2)
     delta = (points[..., 0, :] - context[..., :2]) * scale

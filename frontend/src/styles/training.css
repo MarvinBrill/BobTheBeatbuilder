@@ -11,27 +11,27 @@
 .cuda-settings {
   margin: 16px 0;
   padding: 14px;
-  background: #b092c208;
+  background: color-mix(in srgb, var(--color-tint-2) 3.1%, transparent);
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 .cuda-settings small {
   display: block;
   line-height: 1.7;
-  color: #a08cac;
+  color: var(--color-tint);
 }
 .dataset-summary {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #b092c208;
+  background: color-mix(in srgb, var(--color-tint-2) 3.1%, transparent);
   border: 1px solid var(--border);
   padding: 15px;
   border-radius: 8px;
   margin: 20px 0;
 }
 .dataset-summary svg {
-  color: #af92c0;
+  color: var(--color-tint-2);
 }
 .dataset-summary b {
   font-size: 13px;
@@ -60,13 +60,13 @@
     0deg,
     transparent,
     transparent 45px,
-    #ffffff09 46px
+    color-mix(in srgb, var(--color-white) 3.5%, transparent) 46px
   );
 }
 .empty-chart p {
   z-index: 1;
   font-size: 13px;
-  color: #94809e;
+  color: var(--color-ink-4);
 }
 .loss-chart {
   display: block;
@@ -79,11 +79,39 @@
   font-size: 12px;
   margin: 5px 0 22px;
 }
-.chart-legend span:first-child {
-  color: #ee9bc6;
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink-2);
 }
-.chart-legend span:last-child {
-  color: #9ca8f6;
+.chart-legend span::before {
+  content: "";
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-accent);
+}
+.chart-legend span:last-child::before {
+  background: var(--color-lavender);
+}
+.chart-gridline {
+  stroke: color-mix(in srgb, var(--color-white) 6%, transparent);
+}
+.chart-line {
+  fill: none;
+  stroke-width: 3;
+  stroke: var(--color-accent);
+}
+.chart-line.validation {
+  stroke: var(--color-lavender);
+}
+.chart-point {
+  fill: var(--color-accent);
+}
+.chart-axis {
+  fill: var(--color-muted);
+  font-size: 13px;
 }
 .metric-row {
   display: grid;
@@ -94,7 +122,6 @@
 }
 .metric-row small {
   font-size: 12px;
-  letter-spacing: 1px;
 }
 .metric-row b {
   display: block;
@@ -104,7 +131,7 @@
 }
 .metric-row b span {
   font-size: 12px;
-  color: #8d7798;
+  color: var(--color-ink-4);
   font-weight: 400;
 }
 .training-explainer > div {
@@ -114,17 +141,17 @@
 }
 .training-explainer > div > span {
   font-size: 12px;
-  color: #c396cb;
+  color: var(--color-violet);
   margin-top: 4px;
 }
 .training-explainer p {
   font-size: 13px;
-  color: #a08cac;
+  color: var(--color-tint);
   line-height: 1.8;
 }
 .training-explainer b {
   display: block;
-  color: #cfb9da;
+  color: var(--color-ink-2);
   font-weight: 500;
   margin-bottom: 3px;
 }
@@ -135,10 +162,10 @@
   text-align: center;
   flex-direction: column;
   gap: 20px;
-  color: #bda3cf;
+  color: var(--color-tint-3);
 }
 .large-empty p {
-  color: #94809f;
+  color: var(--color-ink-4);
   font-size: 14px;
 }
 .model-grid {
@@ -152,17 +179,39 @@
   align-items: center;
   justify-content: center;
   gap: 25px;
-  color: #c99dd9;
-  background: radial-gradient(ellipse, #8e4e9e25, transparent 70%);
+  color: var(--color-violet);
+  background: radial-gradient(ellipse, color-mix(in srgb, var(--color-accent-deep-2) 14.5%, transparent), transparent 70%);
   margin-bottom: 15px;
 }
 .model-art > span {
+  font-size: 13px;
+}
+.model-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 8px;
+}
+.model-stats dt {
+  hyphens: auto;
+  overflow-wrap: anywhere;
   font-size: 12px;
-  letter-spacing: 3px;
+  color: var(--color-muted);
+}
+.model-stats dd {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink);
+}
+.dataset-summary .text-button {
+  white-space: nowrap;
+  margin-top: 8px;
+  font-size: 13px;
 }
 .model-card > p {
   font-size: 13px;
-  color: #a68db5;
+  color: var(--color-tint);
   line-height: 1.7;
 }
 .model-footer {

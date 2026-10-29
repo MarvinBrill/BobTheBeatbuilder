@@ -2,21 +2,27 @@ import { TrainingPerformance } from "./TrainingPerformance";
 import { TrainingQuality } from "./TrainingQuality";
 import { LossChart } from "../components/LossChart";
 import { useState } from "react";
-import { BrainCircuit, Cpu, Play, Layers } from "lucide-react";
+import { ArrowUpRight, BrainCircuit, Cpu, Play, Layers } from "lucide-react";
 import { api } from "../api";
+import { ActionHint, BusyIcon, ProgressLine } from "../components/Feedback";
+import { activeJob, jobMessage, isActive, scrollToActivity, statusLabel } from "./jobs";
+import { usePendingJob } from "./usePendingJob";
 import { DeviceSelect } from "../components/Controls";
 import type { Device, Hardware, State } from "../types";
+import { isStyled } from "./styleControls";
 
 export function Training({
   state,
   hardware,
   refresh,
   onError,
+  goLibrary,
 }: {
   state: State;
   hardware: Hardware | null;
   refresh: () => void;
   onError: (message: string) => void;
+  goLibrary?: () => void;
 }) {
   const [datasetId, setDatasetId] = useState("");
   const [name, setName] = useState("My mapping style");
@@ -32,18 +38,55 @@ export function Training({
   const [contextRobustness, setContextRobustness] = useState(false);
   const [rolloutValidation, setRolloutValidation] = useState(true);
   const [resumeId, setResumeId] = useState("");
+  const [initId, setInitId] = useState("");
+  const [mapperMinimum, setMapperMinimum] = useState(10);
   const [seed, setSeed] = useState(42);
   const [device, setDevice] = useState<Device>(state.device);
-  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const pendingJob = usePendingJob(state.jobs);
+  const starting = submitting || pendingJob.waiting;
   const selected = state.datasets.find(
     (dataset) => dataset.id === (datasetId || state.datasets[0]?.id),
   );
   const latest = state.jobs.find((job) => job.kind === "training");
+  const running = activeJob(state.jobs, "training");
+  const invalid = {
+    epochs: !Number.isInteger(epochs) || epochs < 1 || epochs > 10000,
+    batchSize: !Number.isInteger(batchSize) || batchSize < 1 || batchSize > 64,
+    accumulation:
+      !Number.isInteger(accumulation) || accumulation < 1 || accumulation > 32,
+    learningRate:
+      !Number.isFinite(learningRate) || learningRate <= 0 || learningRate > 0.01,
+    seed: !Number.isInteger(seed) || seed < 0,
+    mapperMinimum:
+      !Number.isInteger(mapperMinimum) || mapperMinimum < 2 || mapperMinimum > 1000,
+  };
+  const bases = state.base_models ?? state.models;
+  const base = bases.find((model) => model.id === initId);
+  const reason = running
+    ? `„${running.name}“ trainiert gerade. Ein weiteres Training startet erst danach; abbrechen kannst du unter Aktivität.`
+    : !selected
+      ? "Erstelle zuerst Trainingsdaten in der Library."
+      : !name.trim()
+        ? "Gib dem Modell einen Namen."
+        : invalid.epochs
+          ? "Epochen: ganze Zahl von 1 bis 10000."
+          : invalid.batchSize
+            ? "Batch-Größe: ganze Zahl von 1 bis 64."
+            : invalid.accumulation
+              ? "Updates sammeln: ganze Zahl von 1 bis 32."
+              : invalid.learningRate
+                ? "Lernrate: größer als 0 und höchstens 0,01."
+                : invalid.seed
+                  ? "Seed: ganze Zahl ab 0."
+                  : invalid.mapperMinimum
+                    ? "Mapper ab: ganze Zahl von 2 bis 1000."
+                    : "";
 
   async function start() {
-    setBusy(true);
+    setSubmitting(true);
     try {
-      await api("/train", {
+      const job = await api("/train", {
         name,
         dataset_id: selected?.id,
         epochs,
@@ -54,16 +97,19 @@ export function Training({
         model_size: modelSize,
         gradient_accumulation: accumulation,
         resume_model_id: resumeId || null,
+        init_model_id: resumeId ? null : initId || null,
+        mapper_min_maps: mapperMinimum,
         precision: device === "cuda" ? precision : "auto",
         cuda_graphs: cudaGraphs,
         context_robustness: contextRobustness,
         rollout_validation: rolloutValidation,
       });
+      pendingJob.track(job);
       refresh();
     } catch (error) {
       onError((error as Error).message);
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   }
 
@@ -71,17 +117,17 @@ export function Training({
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">LERNT VON DEINEN LIEBLINGSMAPS.</div>
           <h1>
-            Train your <em>style.</em>
+            Train your <span className="accent">style.</span>
           </h1>
           <p>
-            Ein Modell für Rhythmus, Positionen und Slider. Trainiert auf deinem
-            Rechner.
+            Lernt von deinen Lieblingsmaps. Ein Modell für Rhythmus, Positionen
+            und Slider, trainiert auf deinem Rechner.
           </p>
         </div>
         <span className="pill">
-          <Cpu size={14} /> {hardware?.name || "Hardware wird geprüft"}
+          <Cpu size={14} aria-hidden="true" />{" "}
+          {hardware?.name || "Hardware wird geprüft …"}
         </span>
       </div>
       <div className="training-grid">
@@ -112,7 +158,7 @@ export function Training({
               </option>
               {state.datasets.map((dataset) => (
                 <option key={dataset.id} value={dataset.id}>
-                  {dataset.name} · {dataset.count} Maps
+                  {dataset.name} ({dataset.count} Maps)
                 </option>
               ))}
             </select>
@@ -130,6 +176,15 @@ export function Training({
                   ? "Prüfsongs werden nach Audio und Künstler/Titel getrennt."
                   : "Mindestens 2 verschiedene Songs für unabhängige Validierung."}
               </small>
+              {!state.datasets.length && goLibrary && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={goLibrary}
+                >
+                  Maps in der Library auswählen <ArrowUpRight size={15} />
+                </button>
+              )}
             </div>
           </div>
           <DeviceSelect
@@ -146,9 +201,9 @@ export function Training({
                   onChange={(event) => setPrecision(event.target.value)}
                 >
                   <option value="auto">
-                    Automatisch · BF16, wenn unterstützt
+                    Automatisch (BF16, wenn unterstützt)
                   </option>
-                  <option value="float32">Float32 · Vergleichsmodus</option>
+                  <option value="float32">Float32 (Vergleichsmodus)</option>
                 </select>
               </label>
               <label className="checkbox-label">
@@ -171,13 +226,20 @@ export function Training({
               Modellgröße
               <select
                 value={modelSize}
-                disabled={!!resumeId}
+                disabled={!!resumeId || !!initId}
                 onChange={(event) => setModelSize(event.target.value)}
               >
-                <option value="compact">Kompakt · weniger Speicher</option>
-                <option value="standard">Standard · empfohlen</option>
-                <option value="large">Groß · mehr Kapazität</option>
+                <option value="compact">Kompakt (weniger Speicher)</option>
+                <option value="standard">Standard (empfohlen)</option>
+                <option value="large">Groß (mehr Kapazität)</option>
               </select>
+              {(resumeId || initId) && (
+                <small>
+                  {resumeId
+                    ? "Beim Fortsetzen bleibt die Größe des Trainingsstands."
+                    : "Die Größe kommt vom Startmodell, damit seine Gewichte passen."}
+                </small>
+              )}
             </label>
             <label>
               Updates sammeln
@@ -186,6 +248,7 @@ export function Training({
                 min={1}
                 max={32}
                 value={accumulation}
+                aria-invalid={invalid.accumulation}
                 onChange={(event) =>
                   setAccumulation(Number(event.target.value))
                 }
@@ -203,7 +266,9 @@ export function Training({
               {state.models
                 .filter(
                   (model) =>
-                    model.continuable && model.dataset_id === selected?.id,
+                    model.continuable &&
+                    model.dataset_id === selected?.id &&
+                    isStyled(model),
                 )
                 .map((model) => (
                   <option key={model.id} value={model.id}>
@@ -211,6 +276,31 @@ export function Training({
                   </option>
                 ))}
             </select>
+          </label>
+          <label>
+            Startpunkt
+            <select
+              value={resumeId ? "" : initId}
+              disabled={!!resumeId}
+              onChange={(event) => setInitId(event.target.value)}
+            >
+              <option value="">Zufällig initialisiert</option>
+              {bases.map((model) => (
+                <option key={model.id} value={model.id}>
+                  Gewichte übernehmen: {model.name}
+                  {"current" in model && model.current === false
+                    ? " (ältere Architektur)"
+                    : (model.style_version ?? 1) >= 2
+                      ? ""
+                      : " (älteres Modell)"}
+                </option>
+              ))}
+            </select>
+            <small>
+              {base
+                ? "Audio-, Rhythmus- und Positionsgewichte werden übernommen; Sterne-, Stil-, Mapper- und Rhythmus-Pattern-Teile lernen neu. Für Feintuning auf einen Mapper oder eine Sterne-Spanne: kleineren Datensatz wählen und Lernrate auf 0,0001 senken."
+                : "Ein Startmodell spart viel Trainingszeit. Auch ältere Modelle ohne Sterne-Steuerung eignen sich."}
+            </small>
           </label>
           <div className="field-row">
             <label>
@@ -220,6 +310,7 @@ export function Training({
                 min={1}
                 max={10000}
                 value={epochs}
+                aria-invalid={invalid.epochs}
                 onChange={(event) => setEpochs(Number(event.target.value))}
               />
             </label>
@@ -230,6 +321,7 @@ export function Training({
                 min={1}
                 max={64}
                 value={batchSize}
+                aria-invalid={invalid.batchSize}
                 onChange={(event) => setBatchSize(Number(event.target.value))}
               />
             </label>
@@ -243,6 +335,7 @@ export function Training({
                 max={0.01}
                 step={0.0001}
                 value={learningRate}
+                aria-invalid={invalid.learningRate}
                 onChange={(event) =>
                   setLearningRate(Number(event.target.value))
                 }
@@ -254,17 +347,33 @@ export function Training({
                 type="number"
                 min={0}
                 value={seed}
+                aria-invalid={invalid.seed}
                 onChange={(event) => setSeed(Number(event.target.value))}
               />
             </label>
           </div>
+          <label>
+            Mapper-Profil ab
+            <input
+              type="number"
+              min={2}
+              max={1000}
+              value={mapperMinimum}
+              aria-invalid={invalid.mapperMinimum}
+              onChange={(event) => setMapperMinimum(Number(event.target.value))}
+            />
+            <small>
+              Mindestanzahl Trainingsmaps, damit ein Mapper ein eigenes gelerntes
+              Profil bekommt. Gast-Difficulties zählen für den Gast-Mapper.
+            </small>
+          </label>
           <label className="checkbox-label">
             <input
               type="checkbox"
               checked={contextRobustness}
               onChange={(event) => setContextRobustness(event.target.checked)}
             />
-            Eigene Positionsvorschläge trainieren · experimentell
+            Eigene Positionsvorschläge trainieren (experimentell)
           </label>
           <label className="checkbox-label">
             <input
@@ -283,12 +392,31 @@ export function Training({
             zum Trainingsende.
           </p>
           <button
+            type="button"
             className="primary full-width"
-            disabled={busy || !selected || !name.trim()}
+            disabled={starting || !!reason}
+            aria-busy={starting}
+            aria-describedby="training-hint"
             onClick={() => void start()}
           >
-            <Play size={17} /> Training starten
+            <BusyIcon busy={starting} icon={Play} />
+            {starting ? "Wird gestartet …" : "Training starten"}
           </button>
+          <ActionHint id="training-hint">
+            {reason}
+            {running && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="text-button inline"
+                  onClick={scrollToActivity}
+                >
+                  Zur Aktivität
+                </button>
+              </>
+            )}
+          </ActionHint>
           <p className="fine-print">
             Gespeichert wird der Stand mit dem niedrigsten Prüfverlust (ohne
             Prüfsongs: Trainingsverlust). Der letzte Trainingsstand bleibt
@@ -300,10 +428,18 @@ export function Training({
           <section className="panel">
             <div className="panel-heading">
               <h2>Lernkurve</h2>
-              <span className="tag">
-                {latest?.status || "Noch kein Training"}
+              <span className={`tag status-${latest?.status || "none"}`}>
+                {latest ? statusLabel(latest.status) : "Noch kein Training"}
+                {isActive(latest) &&
+                  ` ${Math.round((latest?.progress || 0) * 100)} %`}
               </span>
             </div>
+            {running && (
+              <ProgressLine
+                value={running.progress}
+                label={jobMessage(running) || "Training läuft"}
+              />
+            )}
             <LossChart metrics={latest?.metrics || []} />
             {latest?.warnings?.map((warning) => (
               <p className="fine-print" key={warning}>
@@ -312,7 +448,7 @@ export function Training({
             ))}
             <div className="metric-row">
               <div>
-                <small>EPOCHE</small>
+                <small>Epoche</small>
                 <b>
                   {latest?.metrics.length || "—"}
                   <span>
@@ -322,11 +458,11 @@ export function Training({
                 </b>
               </div>
               <div>
-                <small>GESAMT TRAINING</small>
+                <small>Gesamtverlust Training</small>
                 <b>{latest?.metrics.at(-1)?.train_loss.toFixed(4) || "—"}</b>
               </div>
               <div>
-                <small>GESAMT VALIDIERUNG</small>
+                <small>Gesamtverlust Validierung</small>
                 <b>
                   {latest?.metrics.at(-1)?.validation_loss?.toFixed(4) || "—"}
                 </b>
@@ -336,8 +472,8 @@ export function Training({
             <TrainingQuality job={latest} />
             {latest?.metrics.at(-1)?.motion_mae !== undefined && (
               <p className="fine-print">
-                Bewegungsfehler: {latest.metrics.at(-1)?.motion_mae?.toFixed(3)}{" "}
-                · Objekttyp korrekt:{" "}
+                Bewegungsfehler: {latest.metrics.at(-1)?.motion_mae?.toFixed(3)},
+                Objekttyp korrekt:{" "}
                 {(
                   (latest.metrics.at(-1)?.object_type_accuracy ?? 0) * 100
                 ).toFixed(1)}{" "}
@@ -345,15 +481,24 @@ export function Training({
                 Generierungen prüfen zusätzlich die eigene Bewegungsfolge.
               </p>
             )}
+            {latest?.metrics.at(-1)?.rhythm_accuracy !== undefined && (
+              <p className="fine-print">
+                Rhythmus-Patterns auf Prüfsongs: nächster Abstand exakt{" "}
+                {((latest.metrics.at(-1)?.rhythm_accuracy ?? 0) * 100).toFixed(1)} %,
+                unter den Top 3{" "}
+                {((latest.metrics.at(-1)?.rhythm_top3_accuracy ?? 0) * 100).toFixed(1)}{" "}
+                %. Mehrere Rhythmen können zur selben Musik passen.
+              </p>
+            )}
             {latest?.metrics.at(-1)?.onset_f1 !== undefined && (
               <p className="fine-print">
                 Notenzeitpunkte auf Prüfsongs (±35 ms): F1{" "}
-                {((latest.metrics.at(-1)?.onset_f1 ?? 0) * 100).toFixed(1)} % ·
+                {((latest.metrics.at(-1)?.onset_f1 ?? 0) * 100).toFixed(1)} %,
                 Präzision{" "}
                 {((latest.metrics.at(-1)?.onset_precision ?? 0) * 100).toFixed(
                   1,
                 )}{" "}
-                % · Trefferquote{" "}
+                %, Trefferquote{" "}
                 {((latest.metrics.at(-1)?.onset_recall ?? 0) * 100).toFixed(1)}{" "}
                 %. Gemessen vor Dichtevorgabe und Rasterkorrektur; kein
                 Spielspaß-Score.
@@ -383,6 +528,15 @@ export function Training({
                 <b>Kandidaten prüfen</b>Mehrere Platzierungen werden nach
                 gelerntem Kontext, Bewegung und Lesbarkeit verglichen. Der
                 Export prüft Grenzen, Slider-Zeiten und Überlappungen.
+              </p>
+            </div>
+            <div>
+              <span>04</span>
+              <p>
+                <b>Sterne, Patterns, Mapper</b>Jede Trainingsmap wird
+                vermessen: offizielles Star Rating (Aim/Speed), Bursts, Streams,
+                Sprungweiten, Winkel, Slider. Dazu ein gelerntes Profil pro
+                Mapper. Beim Generieren steuerst du genau diese Werte.
               </p>
             </div>
             <p className="muted">

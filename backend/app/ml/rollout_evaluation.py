@@ -9,7 +9,7 @@ import torch
 from ..beatmaps import write, parse
 from ..config import DATA
 from .audio import FRAME_MS
-from .sequence_generation import generate_objects
+from .sequence_generation import generate_objects, generate_objects_v2
 from .phrase_metrics import onset_matches
 from .rollout_sections import (
     section_plan,
@@ -17,6 +17,7 @@ from .rollout_sections import (
     MAX_FULL_SECONDS,
     MAX_FULL_OBJECTS,
 )
+from . import style
 
 REPORT_SCHEMA = "free-generation-sections-v2"
 
@@ -49,6 +50,31 @@ def rollout_settings(condition, seed):
         artist="Validation corpus",
         version="Diagnostic",
     )
+    return settings
+
+
+def styled_rollout_settings(item, seed):
+    values = {key: style.decode(key, item["style"][style.INDEX[key]]) for key in style.KEYS}
+    triplets = (
+        item["style_mask"][style.INDEX["triplet_share"]] > 0 and values["triplet_share"] > 0.01
+    )
+    settings = {
+        **{key: values[key] for key in ("ar", "cs", "od", "hp")},
+        "slider_bias": 0.5,
+        "seed": seed,
+        "temperature": 0.8,
+        "candidates": 12,
+        "bpm": None,
+        "offset": 0,
+        "snap": True,
+        "divisor": 12 if triplets else 4,
+        "title": "Free evaluation",
+        "artist": "Validation corpus",
+        "version": "Diagnostic",
+    }
+    if item.get("timing"):
+        # The reference timing isolates pattern quality from tempo detection.
+        settings.update(timing_override=list(item["timing"]), timing_source="reference")
     return settings
 
 
@@ -85,23 +111,40 @@ def roundtrip_report(objects, timing, settings):
 def evaluate_rollout(
     model, item, selected_device, context, max_objects=256, progress=0.97, section=None, seed=42
 ):
-    condition = item["condition"]
-    settings = rollout_settings(condition, seed)
     duration = max(0.0, (len(item["mel"]) - 1) * FRAME_MS)
     start, end = (section["start_ms"], section["end_ms"]) if section else (0.0, duration)
     started = time.perf_counter()
     model.eval()
-    objects, timing, diagnostics = generate_objects(
-        model,
-        item["mel"],
-        item["audio_path"],
-        settings,
-        torch.from_numpy(condition.copy())[None].to(selected_device),
-        selected_device,
-        RolloutProgress(context, progress),
-        max_objects=max_objects,
-        evaluation_range=(start, end),
-    )
+    if getattr(model, "styled", False):
+        settings = styled_rollout_settings(item, seed)
+        condition = style.condition_input(item["style"], item["style_mask"])
+        mapper = torch.tensor([float(item.get("mapper", 0))], device=selected_device)
+        objects, timing, diagnostics = generate_objects_v2(
+            model,
+            item["mel"],
+            item["audio_path"],
+            settings,
+            torch.from_numpy(condition)[None].to(selected_device),
+            selected_device,
+            RolloutProgress(context, progress),
+            max_objects=max_objects,
+            mapper=mapper,
+            evaluation_range=(start, end),
+        )
+    else:
+        condition = item["condition"]
+        settings = rollout_settings(condition, seed)
+        objects, timing, diagnostics = generate_objects(
+            model,
+            item["mel"],
+            item["audio_path"],
+            settings,
+            torch.from_numpy(condition.copy())[None].to(selected_device),
+            selected_device,
+            RolloutProgress(context, progress),
+            max_objects=max_objects,
+            evaluation_range=(start, end),
+        )
     # Coverage is fixed before generation; sparse output cannot shorten the reference.
     predicted = np.array([obj.time for obj in objects])
     events = item["events"]

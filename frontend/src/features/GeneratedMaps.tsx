@@ -26,7 +26,9 @@ export function GeneratedMaps({
     <section className="panel recent-panel">
       <div className="panel-heading">
         <h2>Deine Kreationen</h2>
-        <span className="tag">{outputs.length} Maps</span>
+        <span className="tag">
+          {outputs.length} {outputs.length === 1 ? "Map" : "Maps"}
+        </span>
       </div>
       {blocked && (
         <p className="fine-print">
@@ -38,15 +40,24 @@ export function GeneratedMaps({
           {outputs.slice(offset, offset + PAGE_SIZE).map((output) => (
             <div className="output-row" key={output.id}>
               <button
+                type="button"
                 className="text-button"
                 aria-pressed={output.id === selectedId}
                 onClick={() => onSelect(output.id)}
               >
-                <AudioLines size={18} />
+                <AudioLines size={18} aria-hidden="true" />
                 <span>
                   {output.name}
                   <small>
-                    {output.objects} Objekte · {output.bpm} BPM
+                    {output.stars != null && (
+                      <span className="result-stars">
+                        {output.stars.toFixed(2)} ★
+                        {output.target_stars != null &&
+                          ` (Ziel ${output.target_stars.toFixed(1)})`}
+                        {", "}
+                      </span>
+                    )}
+                    {output.objects} Objekte, {output.bpm} BPM
                   </small>
                 </span>
               </button>
@@ -70,10 +81,11 @@ export function GeneratedMaps({
           ))}
           <div className="pagination">
             <span>
-              {offset + 1}–{Math.min(offset + PAGE_SIZE, outputs.length)} von{" "}
+              {offset + 1} bis {Math.min(offset + PAGE_SIZE, outputs.length)} von{" "}
               {outputs.length}
             </span>
             <button
+              type="button"
               className="icon-button"
               aria-label="Vorherige Kreationen"
               disabled={!currentPage}
@@ -82,6 +94,7 @@ export function GeneratedMaps({
               <ArrowLeft size={16} />
             </button>
             <button
+              type="button"
               className="icon-button"
               aria-label="Weitere Kreationen"
               disabled={currentPage >= lastPage}

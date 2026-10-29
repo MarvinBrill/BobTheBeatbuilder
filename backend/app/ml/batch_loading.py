@@ -44,3 +44,7 @@ def device_batches(source, selected_device):
         ready.close()
         pending.cancel()
         pool.shutdown(wait=True, cancel_futures=True)
+        # The producer thread has stopped; release the source's workers and buffers now.
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()

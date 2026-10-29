@@ -1,10 +1,12 @@
 import uvicorn
 from .config import BACKEND
-from .ml.network import device
-from .ml.compute_probe import check_compute
 
 
 def check_device():
+    # Imported lazily: spawned import workers re-import this module and must not load torch.
+    from .ml.network import device
+    from .ml.compute_probe import check_compute
+
     selected = device()
     check_compute(selected)
     print(f"Compute backend ready: {BACKEND} ({selected})", flush=True)

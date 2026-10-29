@@ -115,6 +115,39 @@ def test_train_and_inference_share_exact_temporal_queries():
     np.testing.assert_allclose(queries[0].numpy(), batch["queries"][:12], rtol=1e-5, atol=1e-6)
 
 
+def test_styled_train_and_inference_share_exact_queries_without_the_next_gap():
+    from test_style import styled_item
+
+    item = styled_item()
+    batch = make_example(item, 0, np.arange(12), 1)
+    times = (item["events"][:, 0] * 1000).tolist()
+    objects = [
+        HitObject(row[1] * 512, row[2] * 384, time) for row, time in zip(item["events"], times)
+    ]
+    duration = len(item["mel"]) * 256 / 22050
+    _, queries, _ = decoder_input(
+        objects, times[:12], 11, duration, torch.device("cpu"), item["timing"], styled=True
+    )
+    np.testing.assert_allclose(queries[0].numpy(), batch["queries"][:12], rtol=1e-5, atol=1e-6)
+    # Style-v2 queries never contain the time of the following object.
+    _, later, _ = decoder_input(
+        objects, times[:11] + [times[11] + 40], 10, duration, torch.device("cpu"), item["timing"],
+        styled=True,
+    )  # fmt: skip
+    np.testing.assert_array_equal(queries[0, :11].numpy(), later[0].numpy())
+
+
+def test_pre_drawn_timing_disturbance_matches_the_direct_draw():
+    from app.ml.musical_time import draw_timing_disturbance, apply_timing_disturbance
+
+    timing = [TimingPoint(0, 500, meter=3, meter_confidence=1, bar_origin=0)]
+    for seed in range(30):
+        direct = disturbed_timing(timing, np.random.default_rng(seed))
+        drawn = draw_timing_disturbance(np.random.default_rng(seed))
+        assert apply_timing_disturbance(timing, drawn) == direct
+    assert apply_timing_disturbance(timing, None) == timing
+
+
 def test_timing_disturbances_are_seeded_masked_and_leave_references_unchanged():
     timing = [TimingPoint(0, 500, meter=3, meter_confidence=1, bar_origin=0)]
     original = [asdict(point) for point in timing]

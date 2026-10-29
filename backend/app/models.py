@@ -65,6 +65,21 @@ def import_model(path, context):
             "imported": True,
             "continuable": False,
         }
+        if config.style_version >= 2:
+            vocabulary = metadata.get("mapper_vocab") or []
+            if (
+                not isinstance(vocabulary, list)
+                or not all(isinstance(name, str) and len(name) <= 100 for name in vocabulary)
+                or len(vocabulary) + 1 != config.mapper_slots
+            ):
+                raise ValueError("Model mapper list does not match its weights")
+            model["mapper_vocab"] = vocabulary
+            model["style_version"] = config.style_version
+            for key in ("mapper_profiles", "star_profiles"):
+                if isinstance(metadata.get(key), dict):
+                    model[key] = metadata[key]
+            if isinstance(metadata.get("style_features"), list):
+                model["style_features"] = [str(key) for key in metadata["style_features"]]
         if "trained_slider_geometry" in metadata:
             model["trained_slider_geometry"] = max(0, int(metadata["trained_slider_geometry"]))
             if not model["trained_slider_geometry"]:

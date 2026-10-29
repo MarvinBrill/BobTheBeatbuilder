@@ -32,6 +32,8 @@ def local(value):
 def connect():
     connection = sqlite3.connect(DATA / "bob.sqlite3", timeout=30)
     connection.execute("PRAGMA journal_mode=WAL")
+    # WAL keeps the database consistent with NORMAL; FULL only adds an fsync per commit.
+    connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id))"
     )
@@ -62,6 +64,32 @@ def save(kind: str, item: dict):
             (kind, item["id"], json.dumps(portable(item))),
         )
     return item
+
+
+def save_many(kind: str, items):
+    """Insert or replace many records in one transaction, keeping the given order."""
+    items = list(items)
+    with connect() as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO records VALUES (?,?,?)",
+            ((kind, item["id"], json.dumps(portable(item))) for item in items),
+        )
+    return items
+
+
+def get_many(kind: str, identifiers):
+    """Existing records by id; unknown ids are simply absent."""
+    identifiers = list(dict.fromkeys(identifiers))
+    found = {}
+    with connect() as connection:
+        for start in range(0, len(identifiers), 500):
+            chunk = identifiers[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            rows = connection.execute(
+                f"SELECT id, body FROM records WHERE kind=? AND id IN ({marks})", (kind, *chunk)
+            ).fetchall()
+            found.update((row[0], local(json.loads(row[1]))) for row in rows)
+    return found
 
 
 def get(kind: str, identifier: str):

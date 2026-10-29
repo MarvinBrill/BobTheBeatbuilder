@@ -5,11 +5,16 @@ GROUPS = {
     "geometry": ("geometry",),
     "structure": ("kind", "duration", "repeats", "combo"),
     "movement": ("motion", "flow", "compatibility"),
+    "pattern": ("gap",),
 }
 
 
 def grouped_losses(terms):
-    return {name: sum(terms.get(key, 0) for key in keys) for name, keys in GROUPS.items()}
+    return {
+        name: sum(terms.get(key, 0) for key in keys)
+        for name, keys in GROUPS.items()
+        if any(key in terms for key in keys)
+    }
 
 
 def update_quality_bests(metadata, metric):

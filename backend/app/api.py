@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from . import library, store
+from . import difficulty, library, store
 from .config import AUDIO_EXTENSIONS, BACKEND, DATA, MAX_UPLOAD, READER
 from .jobs import Jobs
 from .schemas import GenerateRequest, ScanRequest, Selection, TrainRequest
@@ -60,11 +60,24 @@ def state():
             for item in store.all_records("model")
             if item.get("architecture") == ARCHITECTURE and item.get("event_schema") == EVENT_SCHEMA
         ],
+        # Any model with weights can be a training start point, also older architectures.
+        "base_models": [
+            {
+                "id": item["id"],
+                "name": item.get("name", item["id"]),
+                "architecture": item.get("architecture"),
+                "current": item.get("architecture") == ARCHITECTURE,
+                "style_version": item.get("style_version")
+                or (item.get("model_config") or {}).get("style_version", 1),
+            }
+            for item in store.all_records("model")
+        ],
         "jobs": store.all_records("job")[:100],
         "outputs": [public(item) for item in store.all_records("output")],
         "map_count": store.count("map"),
         "device": BACKEND,
         "reader_ready": READER.is_file(),
+        "difficulty_ready": difficulty.available(),
         "default_path": os.getenv("BOB_OSU_PATH", "/osu" if os.name != "nt" else "D:/osu! lazer"),
     }
 
@@ -133,6 +146,17 @@ def map_ids(
     if len(items) > 50000:
         raise ValueError("Bitte den Filter auf höchstens 50.000 Maps eingrenzen.")
     return {"ids": [item["id"] for item in items], "total": len(items)}
+
+
+@router.post("/maps/stars")
+def calculate_stars(force: bool = False):
+    if not difficulty.available():
+        raise HTTPException(
+            409, "Der Sterne-Rechner fehlt. Führe scripts/setup.ps1 erneut aus, damit er gebaut wird."
+        )
+    return jobs.submit(
+        "stars", "Sterne berechnen", lambda ctx: difficulty.annotate_library(ctx, force)
+    )
 
 
 @router.post("/scan")
@@ -226,8 +250,16 @@ def train(request: TrainRequest):
 
     with jobs.lock:
         store.get("dataset", request.dataset_id)
+        # Jobs run one at a time; a second training would only wait behind the first.
+        if any(store.get("job", identifier).get("kind") == "training" for identifier in list(jobs.events)):
+            raise HTTPException(
+                409,
+                "Es läuft bereits ein Training oder es wartet eines. Breche es zuerst ab (Aktivität).",
+            )
         if request.resume_model_id:
             store.get("model", request.resume_model_id)
+        if request.init_model_id:
+            store.get("model", request.init_model_id)
         return jobs.submit("training", request.name, lambda ctx: operation(request.dict(), ctx))
 
 

@@ -25,6 +25,8 @@ export function useLibraryMaps(
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [selecting, setSelecting] = useState(false);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const generation = useRef(0);
   const minimum = filters.minimum === "" ? null : Number(filters.minimum);
   const maximum = filters.maximum === "" ? null : Number(filters.maximum);
@@ -45,11 +47,18 @@ export function useLibraryMaps(
     },
     [],
   );
+  // Filter changes start from an empty table; a refresh of the same query
+  // keeps the rows on screen (dimmed) until the answer arrives.
+  const view = `${queryString}&offset=${offset}`;
+  const shown = useRef("");
   useEffect(() => {
     let active = true;
     setLoading(true);
-    setItems([]);
-    setTotal(0);
+    setError("");
+    if (shown.current !== view) {
+      setItems([]);
+      setTotal(0);
+    }
     if (invalid) {
       setLoading(false);
       return;
@@ -60,12 +69,18 @@ export function useLibraryMaps(
       )
         .then((result) => {
           if (active) {
+            shown.current = view;
             setItems(result.items);
             setTotal(result.total);
           }
         })
-        .catch((error) => {
-          if (active) onError(error.message);
+        .catch((reason) => {
+          if (active) {
+            shown.current = "";
+            setItems([]);
+            setTotal(0);
+            setError((reason as Error).message);
+          }
         })
         .finally(() => {
           if (active) setLoading(false);
@@ -75,7 +90,7 @@ export function useLibraryMaps(
       active = false;
       clearTimeout(timer);
     };
-  }, [queryString, offset, revision, invalid, onError]);
+  }, [queryString, offset, view, revision, invalid, attempt]);
 
   function updateFilters(change: Partial<MapFilters>) {
     const next = { ...filters, ...change };
@@ -151,5 +166,7 @@ export function useLibraryMaps(
     selectAll,
     toggle,
     clearSelection,
+    error,
+    retry: () => setAttempt((value) => value + 1),
   };
 }

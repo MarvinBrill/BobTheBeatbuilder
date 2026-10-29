@@ -6,7 +6,7 @@
 }
 .activity-empty {
   font-size: 13px;
-  color: #8e819b;
+  color: var(--color-ink-4);
   display: flex;
   gap: 9px;
   align-items: center;
@@ -21,13 +21,13 @@
 }
 .job-icon {
   padding-top: 2px;
-  color: #b7a0c8;
+  color: var(--color-tint-3);
 }
 .job.completed .job-icon {
-  color: #96c4ab;
+  color: var(--color-success-dim);
 }
 .job.failed .job-icon {
-  color: #e595a5;
+  color: var(--color-error);
 }
 .job-body {
   flex: 1;
@@ -43,12 +43,12 @@
   font-weight: 500;
 }
 .job-title span {
-  color: #b49dc1;
+  color: var(--color-tint-2);
   font-size: 12px;
 }
 .job-body p {
   font-size: 12px;
-  color: #95869f;
+  color: var(--color-ink-4);
   margin: 6px 0;
   overflow-wrap: anywhere;
 }
@@ -57,7 +57,7 @@
   font-size: 12px;
 }
 .job-body details {
-  color: #ba9fbb;
+  color: var(--color-ink-25);
   margin-top: 8px;
 }
 .spin {
@@ -71,8 +71,24 @@
 footer {
   display: flex;
   justify-content: space-between;
-  color: #61566e;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--color-ink-5);
   font-size: 12px;
-  padding: 23px 0 0;
-  letter-spacing: 0.3px;
+  padding: 24px 0 0;
+}
+.footer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.activity-panel:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.job.cancelled .job-icon {
+  color: var(--color-muted);
+}
+.job.interrupted .job-icon {
+  color: var(--color-warning);
 }

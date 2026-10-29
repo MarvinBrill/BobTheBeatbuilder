@@ -48,6 +48,10 @@ class ModelConfig:
     dropout: float = 0.1
     enable_musical_time: bool = True
     enable_plan: bool = True
+    # 1: legacy eight-value condition. 2: measured style with masks, star rating, mapper
+    # embedding and a rhythm-pattern head that chooses the next note on the beat grid.
+    style_version: int = 1
+    mapper_slots: int = 1
 
     def dictionary(self):
         return asdict(self)
@@ -66,4 +70,8 @@ class ModelConfig:
             raise ValueError("Invalid mixture/dropout configuration")
         if type(result.enable_musical_time) is not bool or type(result.enable_plan) is not bool:
             raise ValueError("Invalid musical-time or plan ablation setting")
+        if result.style_version not in (1, 2) or not 1 <= result.mapper_slots <= 4096:
+            raise ValueError("Invalid style configuration")
+        if result.style_version == 1 and result.mapper_slots != 1:
+            raise ValueError("Legacy models have no mapper embedding")
         return result

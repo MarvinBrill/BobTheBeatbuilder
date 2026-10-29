@@ -8,7 +8,7 @@
 }
 .storage-summary strong {
   font-size: 28px;
-  color: #efb4d8;
+  color: var(--color-accent-button);
 }
 .storage-summary p {
   color: var(--muted);
@@ -41,15 +41,15 @@
 }
 .storage-row p {
   margin: 6px 0;
-  color: #b5a9c2;
+  color: var(--color-ink-25);
   line-height: 1.6;
 }
 .storage-row small {
-  color: #92859f;
+  color: var(--color-ink-4);
 }
 .storage-size {
   white-space: nowrap;
-  color: #e4bbd8;
+  color: var(--color-accent-light);
 }
 .storage-paths ul {
   max-height: 160px;

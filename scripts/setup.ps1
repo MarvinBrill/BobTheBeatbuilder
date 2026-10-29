@@ -39,6 +39,8 @@ if ($Device -eq 'cuda') {
 }
 Run-Checked $python @('-m','pip','install','-r','backend/requirements.txt')
 Run-Checked 'dotnet' @('publish','exporter/LazerReader.csproj','-c','Release','-o','data/tools/exporter',"-p:BaseIntermediateOutputPath=$repoRoot/data/obj/exporter/","-p:BaseOutputPath=$repoRoot/data/bin/exporter/")
+# Official osu! star rating calculator (ppy.osu.Game.Rulesets.Osu) for training labels and generated maps.
+Run-Checked 'dotnet' @('publish','difficulty/BobDifficulty.csproj','-c','Release','-o','data/tools/difficulty',"-p:BaseIntermediateOutputPath=$repoRoot/data/obj/difficulty/","-p:BaseOutputPath=$repoRoot/data/bin/difficulty/")
 
 Copy-Item frontend/package.json,frontend/package-lock.json data/frontend-runtime/
 Push-Location data/frontend-runtime

@@ -1,20 +1,27 @@
 import numpy as np
 import torch
 from copy import deepcopy
+from scipy.signal import find_peaks
 from .architecture import EVENT_CONTEXT, CENTRAL_FRAMES
 from .audio import FRAME_MS
 from .sequence_data import event_features, summary_features
-from .sequence_batches import event_queries
+from .sequence_batches import event_queries, event_queries_v2
 from .rhythm_inference import encode_window, predict_rhythm, timing_map, timing_at, select_times
 from .playability import quality_report
-from .candidate_selection import choose_candidate, rank_candidates
+from .candidate_selection import choose_candidate, rank_candidates  # noqa: F401 (re-exported)
 from .generation_trace import object_snapshot
 from .joint_planning import skip_option
 from .continuation_search import choose_continuation
 from .motif_memory import MotifMemory, analysis_spans, link_spans
+from .style import GAP_BEATS, REST, STREAM_GAP, allowed_gaps
+from ..timing import red_points
 
 
-def decoder_input(objects, times, index, duration, selected_device, timing):
+def decoder_input(objects, times, index, duration, selected_device, timing, styled=False):
+    """Decoder history and queries; style-v2 models never see the gap to the next head."""
+    if styled:
+        beats = [grid_point(timing, time).beat_length for time in times[: index + 1]]
+        return decoder_input_v2(objects, times, beats, index, duration, selected_device, timing)
     beginning = max(0, index - EVENT_CONTEXT + 1)
     indices = list(range(beginning, index + 1))
     previous = np.stack(
@@ -50,9 +57,12 @@ def generate_objects(
     trace=None,
     evaluation_range=None,
     motif_memory=None,
+    mapper=None,
 ):
+    """Onset-first generation: select all heads from the rhythm map, then decode objects."""
+    styled = getattr(model, "styled", False)
     summary = summary_features(mel)
-    prediction = predict_rhythm(model, mel, summary, condition, selected_device, context)
+    prediction = predict_rhythm(model, mel, summary, condition, selected_device, context, mapper)
     timing, timing_source = timing_map(prediction, audio_path, settings)
     if motif_memory is None and settings.get("motifs", False):
         motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
@@ -87,7 +97,7 @@ def generate_objects(
         central = int(planned_times[query_index] / FRAME_MS) // CENTRAL_FRAMES * CENTRAL_FRAMES
         if central not in memories:
             memory, memory_valid, _, plan = encode_window(
-                model, mel, summary, condition, central, selected_device
+                model, mel, summary, condition, central, selected_device, mapper
             )
             if generated_plan is None:
                 generated_plan = plan[0].detach().float().cpu().numpy()
@@ -102,7 +112,7 @@ def generate_objects(
             if len(memories) > 2:
                 del memories[next(iter(memories))]
         previous, queries, valid = decoder_input(
-            history, planned_times, query_index, duration, selected_device, timing
+            history, planned_times, query_index, duration, selected_device, timing, styled
         )
         return model.decode(previous, queries, valid, *memories[central])
 
@@ -220,5 +230,267 @@ def generate_objects(
         scope="section" if evaluation_range is not None else "song",
         motif_links=len(motif_memory.links) if motif_memory is not None else 0,
         phrase_plan=generated_plan.tolist() if generated_plan is not None else [],
+        rhythm="onsets",
+    )
+    return objects, timing, report
+
+
+# ---------------------------------------------------------------------------------------
+# Style v2: the decoder chooses the rhythm itself, one beat-grid gap at a time, so bursts,
+# streams and 1/2 jump sections are learned as sequences instead of independent onsets.
+
+
+def grid_point(timing, time):
+    """Red line whose grid covers `time`; the first one also extends backwards."""
+    points = red_points(timing)
+    if points and time < points[0].time:
+        return points[0]
+    return timing_at(points, time)
+
+
+def snap_to_grid(time, timing, divisor):
+    point = grid_point(timing, time)
+    grid = point.beat_length / divisor
+    return float(point.time + round((time - point.time) / grid) * grid)
+
+
+def onset_evidence(onset, time):
+    frame = int(round(time / FRAME_MS))
+    return float(onset[max(0, frame - 2) : frame + 3].max(initial=0.0))
+
+
+def audible(active, time):
+    frame = int(round(time / FRAME_MS))
+    return 0 <= frame < len(active) and bool(active[frame])
+
+
+def next_onset(onset, active, start, end, timing, divisor, threshold=0.25, anywhere=False):
+    """First clear onset at or after `start` in audible audio, on the beat grid.
+
+    With `anywhere`, an audible grid position is used when the model predicts no onset
+    at all, so a song with sound is never left unmapped after a break.
+    """
+    first = max(0, int(np.ceil(start / FRAME_MS)))
+    last = min(len(onset), int(end / FRAME_MS) + 1)
+    if last - first < 3:
+        return None
+    for height in (threshold, 0.1):
+        peaks, _ = find_peaks(onset[first:last], height=height, distance=3)
+        for peak in peaks + first:
+            if not active[peak]:
+                continue
+            time = snap_to_grid(peak * FRAME_MS, timing, divisor)
+            if start - 1e-6 <= time <= end and audible(active, time):
+                return time
+    if anywhere:
+        for frame in np.flatnonzero(active[first:last]) + first:
+            time = snap_to_grid(frame * FRAME_MS, timing, divisor)
+            if start - 1e-6 <= time <= end and audible(active, time):
+                return time
+    return None
+
+
+def silence_after(active, time):
+    frame = int(round(time / FRAME_MS))
+    quiet = np.flatnonzero(~active[frame:])
+    return (frame + quiet[0]) * FRAME_MS if len(quiet) else len(active) * FRAME_MS
+
+
+def decoder_input_v2(objects, times, beats, index, duration, selected_device, timing):
+    beginning = max(0, index - EVENT_CONTEXT + 1)
+    indices = list(range(beginning, index + 1))
+    previous = np.stack(
+        [
+            (
+                event_features(objects[i - 1], objects[i - 2] if i > 1 else None)
+                if i
+                else np.zeros(16, np.float32)
+            )
+            for i in indices
+        ]
+    )
+    current = np.asarray([times[i] / 1000 for i in indices])
+    before = np.asarray([times[i - 1] / 1000 if i else 0 for i in indices])
+    beat_seconds = np.asarray([beats[i] / 1000 for i in indices])
+    query = event_queries_v2(current, before, beat_seconds, duration, timing)
+    return (
+        torch.from_numpy(previous).unsqueeze(0).to(selected_device),
+        torch.from_numpy(query).unsqueeze(0).to(selected_device),
+        torch.ones((1, len(indices)), dtype=torch.float32, device=selected_device),
+    )
+
+
+def choose_next_time(logits, obj, timing, onset, active, end, settings, run, rng):
+    """Combine the learned rhythm distribution with audible onsets on the beat grid."""
+    divisor = int(settings.get("divisor", 4))
+    allowed = allowed_gaps(divisor)
+    beat = obj.beat_length
+    shifted = logits - logits.max()
+    log_probs = shifted - np.log(np.exp(shifted).sum())
+    release = obj.time + obj.duration + (max(35.0, 0.24 * beat) if obj.slider else 35.0)
+    weight = float(settings.get("onset_weight", 0.7))
+    bias = float(settings.get("tempo_bias", 0.0))
+    longest = int(settings.get("max_stream") or 0)
+    options = []
+    for index, gap in enumerate(GAP_BEATS):
+        if not allowed[index]:
+            continue
+        # `run` counts consecutive short gaps; a run of n gaps spans n + 1 objects.
+        if gap <= STREAM_GAP and longest and run + 2 > longest:
+            continue
+        time = snap_to_grid(obj.time + gap * beat, timing, divisor)
+        if time < release - 1e-6 or time > end or not audible(active, time):
+            continue
+        evidence = onset_evidence(onset, time)
+        options.append(
+            (log_probs[index] + weight * np.log(evidence + 1e-3) - bias * np.log2(gap), time, index)
+        )
+    pause = next_onset(onset, active, max(release, obj.time + 8.5 * beat), end, timing, divisor)
+    if pause is not None:
+        options.append(
+            (log_probs[REST] + weight * np.log(onset_evidence(onset, pause) + 1e-3), pause, REST)
+        )
+    if not options:
+        # Silence or a break ahead: continue with the next audible onset, if there is one.
+        resume = next_onset(onset, active, release, end, timing, divisor, anywhere=True)
+        return (resume, REST) if resume is not None else None
+    scores = np.array([option[0] for option in options], np.float64)
+    temperature = max(0.05, float(settings.get("rhythm_temperature", 0.6)))
+    scores = (scores - scores.max()) / temperature
+    chances = np.exp(scores) / np.exp(scores).sum()
+    _, time, index = options[int(rng.choice(len(options), p=chances))]
+    return time, index
+
+
+def generate_objects_v2(
+    model,
+    mel,
+    audio_path,
+    settings,
+    condition,
+    selected_device,
+    context,
+    max_objects=None,
+    mapper=None,
+    trace=None,
+    evaluation_range=None,
+    motif_memory=None,
+):
+    """Pattern-first generation for style-v2 models: place an object, then let the rhythm
+    head choose the beat-grid gap to the next one, combined with the audible onsets."""
+    summary = summary_features(mel)
+    prediction = predict_rhythm(model, mel, summary, condition, selected_device, context, mapper)
+    timing, timing_source = timing_map(prediction, audio_path, settings)
+    if motif_memory is None and settings.get("motifs", False):
+        motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
+    active = np.max(mel, axis=1) > -0.7
+    onset = prediction[:, 0]
+    duration = (len(mel) - 1) * FRAME_MS / 1000
+    start, stop = evaluation_range if evaluation_range is not None else (0, duration * 1000)
+    if not 0 <= start < stop <= duration * 1000 + FRAME_MS:
+        raise ValueError("Invalid evaluation range")
+    end = min(duration * 1000 - 100, stop)
+    divisor = int(settings.get("divisor", 4))
+    first = next_onset(onset, active, start, end, timing, divisor, threshold=0.3, anywhere=True)
+    if first is None and evaluation_range is None:
+        raise ValueError(
+            "No playable notes predicted. Check the audio, model training and density."
+        )
+    rng = np.random.default_rng(settings["seed"])
+    objects, repairs, classes = [], [], []
+    times = [first] if first is not None else []
+    beats = [grid_point(timing, first).beat_length] if first is not None else []
+    run, central_cache, generated_plan, truncated = 0, None, None, False
+    with torch.no_grad():
+        while times:
+            index, time = len(objects), times[-1]
+            context.report(
+                0.35 + 0.55 * min(1.0, (time - start) / max(1.0, end - start)),
+                f"Rhythmus und Bewegung erzeugen · {index + 1} Objekte",
+            )
+            central = int(time / FRAME_MS) // CENTRAL_FRAMES * CENTRAL_FRAMES
+            if central_cache != central:
+                memory, memory_valid, _, plan = encode_window(
+                    model, mel, summary, condition, central, selected_device, mapper
+                )
+                if generated_plan is None:
+                    generated_plan = plan[0].detach().float().cpu().numpy()
+                central_cache = central
+            previous, queries, valid = decoder_input_v2(
+                objects, times, beats, index, duration, selected_device, timing
+            )
+            output = model.decode(previous, queries, valid, memory, memory_valid)
+            if not all(torch.isfinite(value).all() for value in output.values()):
+                raise ValueError("Model generated non-finite object predictions")
+            beat = beats[-1]
+            # Sliders may not run into silence, the end of the audio or past eight beats.
+            horizon = min(time + 8 * beat, silence_after(active, time), end + 100) + 35
+            chosen = rank_candidates(
+                model,
+                output,
+                time,
+                horizon,
+                beat,
+                settings,
+                objects,
+                rng,
+                selected_device,
+                trace,
+                motif_memory=motif_memory,
+            )[0]
+            objects.append(chosen.obj)
+            repairs.append(chosen.repair)
+            if trace is not None:
+                trace.record(
+                    "object_choice",
+                    time=time,
+                    candidate_id=chosen.identifier,
+                    object=object_snapshot(chosen.obj),
+                    repair=chosen.repair,
+                )
+            obj = chosen.obj
+            logits = (
+                model.gap_logits(
+                    output["hidden"][:, -1],
+                    torch.tensor([float(obj.slider)], device=selected_device),
+                    torch.tensor([obj.duration / beat], device=selected_device),
+                    torch.tensor([float(obj.repeats)], device=selected_device),
+                )[0]
+                .float()
+                .cpu()
+                .numpy()
+            )
+            if not np.isfinite(logits).all():
+                raise ValueError("Model generated non-finite rhythm predictions")
+            choice = choose_next_time(logits, obj, timing, onset, active, end, settings, run, rng)
+            if choice is None:
+                break
+            if max_objects is not None and len(objects) >= max_objects:
+                truncated = True
+                break
+            following, gap = choice
+            if trace is not None:
+                trace.record("rhythm_choice", time=time, next_time=following, gap_class=gap)
+            run = run + 1 if gap != REST and GAP_BEATS[gap] <= STREAM_GAP else 0
+            times.append(following)
+            beats.append(grid_point(timing, following).beat_length)
+            classes.append(gap)
+    report = quality_report(objects, settings)
+    report.update(
+        timing_source=timing_source,
+        timing_sections=len(timing),
+        unknown_meter_sections=sum(point.meter_confidence == 0 for point in timing),
+        export_meter_default=4,
+        mean_geometry_repair=float(np.mean(repairs)) if repairs else 0.0,
+        heavily_repaired_fraction=float(np.mean(np.asarray(repairs) > 0.1)) if repairs else 0.0,
+        evaluation_start_ms=float(start),
+        evaluation_end_ms=float(stop),
+        selected_count_before_limit=len(objects) + int(truncated),
+        truncated=truncated,
+        skipped_interior_heads=0,
+        scope="section" if evaluation_range is not None else "song",
+        motif_links=len(motif_memory.links) if motif_memory is not None else 0,
+        phrase_plan=generated_plan.tolist() if generated_plan is not None else [],
+        rhythm="learned-sequence",
     )
     return objects, timing, report

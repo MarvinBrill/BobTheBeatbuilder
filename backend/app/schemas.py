@@ -24,6 +24,9 @@ class TrainRequest(BaseModel):
     weight_decay: float = Field(default=0.01, ge=0, le=0.2)
     patience: int = Field(default=12, ge=1, le=1000)
     resume_model_id: Optional[str] = None
+    # Start from another model's weights (also older models); new layers start fresh.
+    init_model_id: Optional[str] = None
+    mapper_min_maps: int = Field(default=10, ge=2, le=1000)
     dataset_id: str
     name: str = Field(default="My first mapper", min_length=1, max_length=100)
     epochs: int = Field(default=100, ge=1, le=10000)
@@ -77,8 +80,21 @@ class GenerateRequest(BaseModel):
     bpm: Optional[float] = Field(default=None, ge=20, le=400)
     offset: float = Field(default=0, ge=-10000, le=60000)
     snap: bool = True
-    divisor: Literal[1, 2, 3, 4, 6, 8] = 4
+    divisor: Literal[1, 2, 3, 4, 6, 8, 12] = 4
     device: Device = "cpu"
+    # Style-v2 models: target difficulty, mapper and explicit pattern values (UI units).
+    # Values left out are inferred by the model from the audio and the other settings.
+    target_stars: Optional[float] = Field(default=None, ge=0.5, le=12)
+    aim_share: Optional[float] = Field(default=None, ge=0, le=1)
+    mapper: Optional[str] = Field(default=None, max_length=100)
+    style: dict[str, float] = Field(default_factory=dict)
+    max_stream: int = Field(default=0, ge=0, le=256)
+    rhythm_temperature: float = Field(default=0.6, ge=0.05, le=1.5)
+    calibrate: bool = False
+    calibration_rounds: int = Field(default=3, ge=1, le=5)
+    # "patterns": the model chooses each next note on the beat grid (style-v2 models).
+    # "onsets": all heads are selected from the onset map first; legacy models always do.
+    rhythm_mode: Literal["patterns", "onsets"] = "patterns"
 
     @root_validator(skip_on_failure=True)
     def ordered_timing(cls, values):

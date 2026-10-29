@@ -11,6 +11,9 @@ export const defaultAdvanced = {
   seed: 42,
   temperature: 0.8,
   candidates: 12,
+  max_stream: 0,
+  rhythm_temperature: 0.6,
+  rhythm_mode: "patterns" as "patterns" | "onsets",
 };
 
 export function StudioAdvanced({
@@ -21,7 +24,9 @@ export function StudioAdvanced({
   hardware,
   version,
   setVersion,
+  styled = false,
 }: {
+  styled?: boolean;
   value: typeof defaultAdvanced;
   onChange: (value: typeof defaultAdvanced) => void;
   device: Device;
@@ -72,9 +77,9 @@ export function StudioAdvanced({
                 update({ divisor: Number(event.target.value) })
               }
             >
-              {[1, 2, 3, 4, 6, 8].map((number) => (
+              {[1, 2, 3, 4, 6, 8, 12].map((number) => (
                 <option key={number} value={number}>
-                  1/{number}
+                  {number === 12 ? "1/12 (1/4 und 1/3 gemischt)" : `1/${number}`}
                 </option>
               ))}
             </select>
@@ -95,6 +100,47 @@ export function StudioAdvanced({
           />{" "}
           Nahe Treffer am Raster ausrichten
         </label>
+        {styled && (
+          <label>
+            Rhythmus-Auswahl
+            <select
+              value={value.rhythm_mode}
+              onChange={(event) =>
+                update({
+                  rhythm_mode: event.target.value as "patterns" | "onsets",
+                })
+              }
+            >
+              <option value="patterns">Patterns: Modell wählt jede nächste Note</option>
+              <option value="onsets">Onsets: erst alle Zeitpunkte, dann Objekte</option>
+            </select>
+            <small>{generationHelp.rhythmMode}</small>
+          </label>
+        )}
+        {styled && value.rhythm_mode === "patterns" && (
+          <div className="field-row">
+            <label>
+              Längster Stream
+              <input
+                type="number"
+                min={0}
+                max={256}
+                value={value.max_stream}
+                onChange={(event) => update({ max_stream: Number(event.target.value) })}
+              />
+              <small>Obergrenze für zusammenhängende 1/4-Noten. 0 = keine Grenze.</small>
+            </label>
+            <Slider
+              label="Rhythmus-Vielfalt"
+              help={generationHelp.rhythm}
+              value={value.rhythm_temperature}
+              min={0.1}
+              max={1.5}
+              step={0.05}
+              onChange={(rhythm_temperature) => update({ rhythm_temperature })}
+            />
+          </div>
+        )}
         <Slider
           label="Variantenvielfalt"
           help={generationHelp.temperature}

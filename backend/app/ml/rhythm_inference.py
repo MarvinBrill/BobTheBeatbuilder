@@ -8,7 +8,7 @@ from .sequence_batches import audio_window
 from ..timing import TimingPoint, timing_at
 
 
-def encode_window(model, mel, summary, condition, central, selected_device):
+def encode_window(model, mel, summary, condition, central, selected_device, mapper=None):
     values = audio_window(mel, summary, central)
     batch = {
         key: torch.from_numpy(value.copy()).unsqueeze(0).to(selected_device)
@@ -22,14 +22,17 @@ def encode_window(model, mel, summary, condition, central, selected_device):
             batch["audio_times"],
             batch["global_times"],
             batch["audio_valid"],
+            mapper,
         )
 
 
-def predict_rhythm(model, mel, summary, condition, selected_device, context):
+def predict_rhythm(model, mel, summary, condition, selected_device, context, mapper=None):
     output = np.empty((len(mel), 4), np.float32)
     for central in range(0, len(mel), CENTRAL_FRAMES):
         context.report(0.05 + 0.3 * central / len(mel), "Musikalischen Verlauf analysieren")
-        _, _, rhythm, _ = encode_window(model, mel, summary, condition, central, selected_device)
+        _, _, rhythm, _ = encode_window(
+            model, mel, summary, condition, central, selected_device, mapper
+        )
         count = min(CENTRAL_FRAMES, len(mel) - central)
         output[central : central + count] = (
             rhythm[0, :, AUDIO_MARGIN : AUDIO_MARGIN + count].cpu().numpy().T
@@ -41,6 +44,13 @@ def predict_rhythm(model, mel, summary, condition, selected_device, context):
 
 
 def timing_map(prediction, audio_path, settings):
+    if settings.get("timing_override"):
+        # Timing that is already known: the first calibration round's detection, or the
+        # reference map's red lines in free validation. Never re-detected per round.
+        points = list(settings["timing_override"])
+        if not points or not all(isinstance(point, TimingPoint) for point in points):
+            raise ValueError("Invalid timing override")
+        return points, settings.get("timing_source", "reference")
     if settings.get("timing_points"):
         points = [
             TimingPoint(
