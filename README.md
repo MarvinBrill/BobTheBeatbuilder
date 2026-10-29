@@ -73,9 +73,9 @@ From PowerShell in the repository:
 
 Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)**. Stop with `Ctrl+C` after your tasks finish. Run only one app process against a given data directory.
 
-On a fresh checkout, the start script invokes setup when required components are missing. Setup installs application dependencies and builds the frontend and reader; it does **not** install system prerequisites or GPU drivers. It checks the selected compute backend rather than silently falling back to CPU.
+On a fresh checkout, the start script invokes setup when required components are missing. After a pull or merge it also rebuilds whatever is older than its sources: the frontend, the lazer reader, the star rating calculator, and the Python or npm dependencies when their lock files changed. Setup installs application dependencies and builds the frontend and reader; it does **not** install system prerequisites or GPU drivers. It checks the selected compute backend rather than silently falling back to CPU.
 
-To explicitly install or rebuild after pulling changes:
+To explicitly install or rebuild everything:
 
 ```powershell
 .\scripts\setup.ps1 -Device cuda
