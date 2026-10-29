@@ -49,6 +49,34 @@ Optionales, **standardmäßig ausgeschaltetes** Zusatztraining ab Epoche 5: Die 
 
 Der normale überwachte Vorwärtslauf und seine zwölf Ziele bleiben erhalten. Ein zusätzlicher Decoderlauf lernt Position/Kurve, Typ, Dauer, Wiederholungen und Combo mit Gewicht 0,1 unter der veränderten Vorgeschichte. Der Audiokontext wird dafür vom Gradientengraphen abgetrennt; es gibt keinen zusätzlichen direkten Encodergradienten. Bewegungs- und Kritikerziele bleiben auf der unveränderten Referenzvorgeschichte, um widersprüchliche Ziele zu vermeiden. Indirekte Veränderungen späterer Optimierungsschritte sind dennoch möglich. Der Zusatzverlust ist separat protokolliert und nicht Teil der vergleichbaren Hauptkurven oder Checkpoint-Auswahl. Der CUDA-Graph wird beim Aktivieren einmal neu aufgezeichnet und liest danach die steigende Wahrscheinlichkeit als Tensor. Abschaltbar für kontrollierte Vergleiche.
 
+## Stil-Conditioning v2: Sterne, Patterns, Mapper
+
+Neue Modelle (`style_version: 2` in `model_config`) ersetzen die acht festen Stilwerte durch 26 gemessene Größen mit Maske. Alle Werte stammen aus der jeweiligen Trainingsmap selbst (`backend/app/ml/style.py`):
+
+| Gruppe | Werte |
+| --- | --- |
+| Schwierigkeit | offizielles Star Rating, Aim-Anteil an Aim + Speed |
+| Einstellungen | AR, CS, OD, HP |
+| Dichte/Tempo | Objekte pro Sekunde, dominantes BPM |
+| Rhythmus | Anteil 1/4-, 1/2- und Triolen-Abstände, Bursts (3–8 Noten in 1/4-Folge), Streams (ab 9), mittlere Folgenlänge |
+| Bewegung | Median-Abstand, 1/2-Sprungweite, Stream-Abstand, Richtungsfluss, spitze Winkel (< 60°), gerade Linien (> 120°), Stacks |
+| Slider | Anteil, Tempo in px/Beat, kurze Slider (≤ 1/2 Beat), Wiederholungen |
+| Struktur | Objekte pro New Combo |
+
+Eingang des Encoders sind maskierte Werte plus Maske (52 Zahlen). Beim Training werden ganze Gruppen zufällig verborgen (Schwierigkeit 15 %, Rhythmus/Bewegung/Slider je 35 %, Struktur 50 %, Tempo 10 %, AR/CS/OD/HP nie). Dadurch funktioniert die Generierung auch, wenn nur Ziel-Sterne oder nur ein Mapper vorgegeben sind; fehlende Werte leitet das Modell aus Musik und Restvorgaben ab.
+
+**Star Rating.** `difficulty/` ist ein kleines .NET-Programm mit `ppy.osu.Game.Rulesets.Osu` (2026.1026.0, inklusive Reading-Skill und Snap/Flow-Aim aus dem Rework vom Juli 2026). Es berechnet No-Mod-Attribute für viele `.osu`-Dateien parallel und schreibt JSON-Zeilen. Import, Datensatz-Vorbereitung und Generierung nutzen dieselbe Berechnung. Ohne gebautes Programm trainiert das Modell mit maskierten Sternen und warnt.
+
+**Mapper.** Der Creator eines stable-Sets ist auch bei Gast-Difficulties eingetragen. Possessive Diff-Namen („NiNo's Insane“, „deetz' Expert“) werden deshalb dem Gast zugeordnet, bekannte Schreibweisen vereinheitlicht. Mapper mit mindestens `mapper_min_maps` Trainingsmaps (Standard 10) erhalten einen Eintrag in einer gelernten Tabelle (One-Hot-Produkt statt Embedding-Lookup, damit DirectML funktioniert); seltene Mapper und 30 % der Beispiele nutzen den neutralen Eintrag 0. Pro Mapper und pro halbem Stern speichert das Modell zusätzlich Median-Profile, mit denen die Oberfläche Regler vorbelegt.
+
+**Rhythmus-Patterns.** Jede Map liefert pro Objekt die Rhythmusklasse des Abstands zum nächsten Objekt: 26 Beat-Abstände von 1/8 bis 8 sowie „Pause“ (über 8,5 Beats). Der Decoder sieht in der Anfrage nur noch den Abstand zum vorigen Objekt (Sekunden und Beats) und das Tempo, nicht mehr den zum nächsten. Ein eigener Kopf sagt aus Vorgeschichte, Audio und dem gerade platzierten Objekt (Circle oder Slider samt Länge) die nächste Rhythmusklasse voraus; Verlust mit Label Smoothing 0,05 und Gewicht 0,5, als eigene Kurve „Rhythmus-Patterns“. Beim Generieren wird der nächste Zeitpunkt so gewählt: Klassenwahrscheinlichkeit plus 0,7 × log Onset-Wahrscheinlichkeit am Rasterpunkt, nur Klassen auf dem gewählten Raster (1/12 mischt 1/4 und 1/3), nicht in digitaler Stille, Slider-Ende plus ¼ Beat Abstand, optional maximale Streamlänge. Damit entstehen Triples, Bursts, Streams und 1/2-Abschnitte als zusammenhängende Folgen statt als unabhängig ausgewählte Onsets.
+
+**Gegen Overfitting.** Der Onset-Zweig bekommt in v2 Dropout (0,1) auf Transformer- und lokale Merkmale, das Mel-Spektrum bis zu zwei maskierte Frequenzbänder. Freie Validierung nutzt das Timing der Referenzmap, damit sie Patterns statt Tempoerkennung misst.
+
+**Kalibrierung.** Mit Ziel-Sternen misst die Generierung die fertige Map. Liegt sie mehr als 0,15 ★ daneben, werden Sterne-Vorgabe und eine Rhythmus-Tendenz nachgeregelt und neu erzeugt (bis zu fünf Runden, beste Runde gewinnt). Ältere Modelle regeln stattdessen Dichte und Abstand nach.
+
+**Startpunkt.** Ein neues Training kann Gewichte eines vorhandenen Modells übernehmen, auch eines älteren v1-Modells. Übernommen wird jeder Tensor mit passender Form; Conditioning, Mapper-Tabelle und Rhythmus-Kopf starten neu. Fortsetzen (Resume) ist nur für v2-Stände möglich.
+
 ## CUDA-Ausführung
 
 CUDA verwendet PyTorch SDPA mit denselben Padding-/Kausalmasken; CPU und DirectML behalten die explizite Attention. Automatische Rechengenauigkeit nutzt auf geeigneter CUDA-Hardware BF16 nur im Netzvorwärtslauf. Die Ausgänge werden vor den zwölf Verlusten nach Float32 zurückgewandelt; insbesondere Mischverteilungen, Bewegungsableitungen und Kontextbewertung bleiben Float32. Mastergewichte, AdamW-Zustand, Validierung und Modell-Dateien bleiben Float32. TF32 ist deaktiviert. „Float32“ in der UI ermöglicht einen Vergleich ohne BF16.
@@ -78,7 +106,7 @@ Optional in Epoche 1, alle fünf Epochen und zum Ende/Frühstopp: bis zu drei fe
 5. CS-gerechte Ränder durch gemeinsames Verschieben/Skalieren der Kontrollpunkte sichern; punktweises Abschneiden würde die Kurve verändern. Großzügige Notfallgrenzen für Sprünge, gültige Slider-Geschwindigkeit, passende Beat-Dauer und mindestens 35 ms bis zum nächsten Objekt bleiben erhalten. Eine zusätzliche Prüfung an 65 Kurvenpunkten verwirft Selbstkreuzungen, scharfe Haken und starke Umwege (Pfadlänge über 3,5-mal Start-Ziel-Abstand ab 20 Pixel Pfadlänge). Doppelte benachbarte Kontrollpunkte werden ausgeschlossen, da sie im `.osu`-Format Bézier-Segmente trennen und nicht dieselbe Bedeutung wie in einer einzelnen SVG-Kubik haben. Normale Bögen und S-Kurven bleiben möglich. Gibt es keinen geeigneten Sliderkandidaten, wird ein Circle erzeugt und als Korrektur gezählt. Absichtliche Stacks bleiben möglich; teilweise überdeckte Kreise werden weich bestraft. Nachfolgeobjekte sehen das endgültige Slider-Ende einschließlich Repeat-Parität.
 6. Deterministischer Writer erzeugt `.osu`: kubische Kurven, Wiederholungen, New Combos, variable rote Timingpoints und passende grüne SV-Punkte. Anschließend erneut parsen und Dauern/Überlappungen prüfen, `.osz` mit Ogg-Audio schreiben. Das Modell lernt keine Dateisyntax.
 
-Kein offizielles Star-Rating, keine Garantie für Ranked-Kriterien. Slider-Kollisionen/visuelle Mehrdeutigkeit über ganze Pfade, präzise Stacking-Semantik und langfristige Ermüdung sind nicht vollständig modelliert. Die Webvorschau verwendet Kurven, Wiederholungen, AR und CS, ist aber kein identischer osu!-Renderer. Hitsounds, Storyboard, Kiai, Spinner und SliderTickRate werden nicht gelernt; TickRate ist beim Export 1.
+Keine Garantie für Ranked-Kriterien; das Star Rating der fertigen Map wird bei verfügbarem Rechner offiziell gemessen. Slider-Kollisionen/visuelle Mehrdeutigkeit über ganze Pfade, präzise Stacking-Semantik und langfristige Ermüdung sind nicht vollständig modelliert. Die Webvorschau verwendet Kurven, Wiederholungen, AR und CS, ist aber kein identischer osu!-Renderer. Hitsounds, Storyboard, Kiai, Spinner und SliderTickRate werden nicht gelernt; TickRate ist beim Export 1.
 
 Die Kurvenprüfung ist eine konservative Stil-/Spielbarkeitsregel dieses Generators, keine offizielle osu!-Zulässigkeitsregel. Absichtlich verschlungene Spezialslider können dadurch wegfallen; die diskrete Prüfung ist kein mathematischer Beweis gegen jede denkbare Kurvenentartung. Der Bericht ergänzt `slider_shape_issues` und `slider_detour_p95`. Netzwerk, Trainingsziele und Gewichtsformat sind durch diese Decoderkorrektur unverändert. Auch vorhandene v3-Gewichte profitieren beim erneuten Generieren; bereits exportierte Maps werden nicht verändert. Referenz für Slider-Segmentierung: [offizielle Dateiformat-Dokumentation](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_%28file_format%29#sliders).
 

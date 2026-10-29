@@ -21,6 +21,8 @@ export interface Metric {
   onset_f1?: number;
   motion_mae?: number;
   object_type_accuracy?: number;
+  rhythm_accuracy?: number;
+  rhythm_top3_accuracy?: number;
   loss_terms?: Record<string, number>;
   epoch: number;
   train_loss: number;
@@ -64,6 +66,8 @@ export interface Job {
     skipped_other_modes?: number;
     error_count?: number;
     errors?: string[];
+    calculated?: number;
+    failed?: number;
   };
 }
 export interface Dataset {
@@ -72,7 +76,21 @@ export interface Dataset {
   count: number;
   songs: number;
 }
+export interface StyleProfile {
+  maps: number;
+  stars_min?: number | null;
+  stars_max?: number | null;
+  /** Median values in UI units, keyed like the style controls. */
+  style: Record<string, number>;
+}
 export interface Model {
+  model_config?: { style_version?: number; width?: number; [key: string]: unknown };
+  style_version?: number;
+  mapper_vocab?: string[];
+  mapper_profiles?: Record<string, StyleProfile>;
+  star_profiles?: Record<string, StyleProfile>;
+  rated_maps?: number;
+  warm_start?: { model_id: string; name?: string; copied_tensors: number; new_tensors: number };
   free_generation_suite?: RolloutSuite;
   training_summary?: TrainingSummary;
   free_generation?: {
@@ -103,6 +121,10 @@ export interface Output {
   name: string;
   objects?: number;
   bpm?: number;
+  stars?: number | null;
+  aim?: number | null;
+  speed?: number | null;
+  target_stars?: number | null;
   created_at: string;
 }
 export interface State {
@@ -114,6 +136,7 @@ export interface State {
   map_count: number;
   device: Device;
   reader_ready: boolean;
+  difficulty_ready?: boolean;
   default_path: string;
 }
 export interface MapItem {
@@ -156,6 +179,10 @@ export interface Preview {
     aim_speed_p95: number;
     heavily_repaired_fraction: number;
     temporal_overlaps: number;
+    rhythm?: string;
+    difficulty?: Record<string, number> | null;
+    calibration?: { round: number; stars: number | null }[];
+    patterns?: Record<string, number>;
   };
   objects: HitObject[];
   duration: number;

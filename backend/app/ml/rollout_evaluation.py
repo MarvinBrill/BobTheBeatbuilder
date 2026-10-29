@@ -3,8 +3,9 @@
 import numpy as np
 import torch
 import hashlib
-from .sequence_generation import generate_objects
+from .sequence_generation import generate_objects, generate_objects_v2
 from .phrase_metrics import onset_matches
+from . import style
 
 
 class RolloutProgress:
@@ -18,32 +19,65 @@ class RolloutProgress:
         self.context.report(self.progress, f"Freie Testgenerierung · {message}")
 
 
+def styled_rollout_settings(item):
+    values = {key: style.decode(key, item["style"][style.INDEX[key]]) for key in style.KEYS}
+    triplets = item["style_mask"][style.INDEX["triplet_share"]] > 0 and values["triplet_share"] > 0.01
+    return {
+        **{key: values[key] for key in ("ar", "cs", "od", "hp")},
+        "slider_bias": 0.5,
+        "seed": 42,
+        "temperature": 0.8,
+        "candidates": 12,
+        "bpm": None,
+        "offset": 0,
+        "snap": True,
+        # The reference timing isolates pattern quality from tempo detection.
+        "timing": [tuple(point) for point in item.get("timing") or []],
+        "divisor": 12 if triplets else 4,
+    }
+
+
 def evaluate_rollout(model, item, selected_device, context, max_objects=256, progress=0.97):
-    condition = item["condition"]
-    settings = dict(zip(("ar", "cs", "od", "hp", "density"), (condition[:5] * 10).tolist()))
-    settings.update(
-        spacing=float(condition[5]),
-        flow=float(condition[6]),
-        slider_bias=float(condition[7]),
-        seed=42,
-        temperature=0.8,
-        candidates=12,
-        bpm=None,
-        offset=0,
-        snap=True,
-        divisor=4,
-    )
     model.eval()
-    objects, _, diagnostics = generate_objects(
-        model,
-        item["mel"],
-        item["audio_path"],
-        settings,
-        torch.from_numpy(condition.copy())[None].to(selected_device),
-        selected_device,
-        RolloutProgress(context, progress),
-        max_objects=max_objects,
-    )
+    if getattr(model, "styled", False):
+        condition = style.condition_input(item["style"], item["style_mask"])
+        mapper = torch.tensor([float(item.get("mapper", 0))], device=selected_device)
+        objects, _, diagnostics = generate_objects_v2(
+            model,
+            item["mel"],
+            item["audio_path"],
+            styled_rollout_settings(item),
+            torch.from_numpy(condition)[None].to(selected_device),
+            selected_device,
+            RolloutProgress(context, progress),
+            max_objects=max_objects,
+            mapper=mapper,
+        )
+    else:
+        condition = item["condition"]
+        settings = dict(zip(("ar", "cs", "od", "hp", "density"), (condition[:5] * 10).tolist()))
+        settings.update(
+            spacing=float(condition[5]),
+            flow=float(condition[6]),
+            slider_bias=float(condition[7]),
+            seed=42,
+            temperature=0.8,
+            candidates=12,
+            bpm=None,
+            offset=0,
+            snap=True,
+            divisor=4,
+        )
+        objects, _, diagnostics = generate_objects(
+            model,
+            item["mel"],
+            item["audio_path"],
+            settings,
+            torch.from_numpy(condition.copy())[None].to(selected_device),
+            selected_device,
+            RolloutProgress(context, progress),
+            max_objects=max_objects,
+        )
     # Other valid mappings exist; agreement with one reference is only a diagnostic.
     predicted = np.array([obj.time for obj in objects])
     reference = item["events"][:, 0] * 1000

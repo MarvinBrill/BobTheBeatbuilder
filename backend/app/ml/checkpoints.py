@@ -30,6 +30,35 @@ def save_training(model, optimizer, directory, state):
     temporary.replace(directory / "training.safetensors")
 
 
+def warm_start(model, identifier):
+    """Copy every weight whose shape matches from another model (any style version).
+
+    New layers (style conditioning, mapper embedding, rhythm head) keep their initialisation;
+    a larger mapper table keeps the base model's rows for the mappers it already knew.
+    """
+    path = DATA / "models" / identifier / "model.safetensors"
+    if not path.is_file():
+        raise ValueError("Das Startmodell hat keine Gewichte mehr")
+    source = load_file(str(path))
+    target = model.state_dict()
+    copied, skipped = 0, []
+    with torch.no_grad():
+        for key, value in target.items():
+            weights = source.get(key)
+            if weights is None:
+                skipped.append(key)
+            elif weights.shape == value.shape:
+                value.copy_(weights.to(value.dtype))
+                copied += 1
+            elif key == "mapper.weight" and weights.shape[1:] == value.shape[1:]:
+                rows = min(weights.shape[0], value.shape[0])
+                value[:rows].copy_(weights[:rows].to(value.dtype))
+                copied += 1
+            else:
+                skipped.append(key)
+    return {"copied_tensors": copied, "new_tensors": len(skipped)}
+
+
 def restore(model, optimizer, identifier, dataset_id):
     from safetensors import safe_open
 

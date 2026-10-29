@@ -11,6 +11,10 @@ import numpy as np
 from .architecture import AUDIO_WINDOW, CENTRAL_FRAMES, AUDIO_MARGIN, EVENT_CONTEXT, EVENT_TARGETS
 from .audio import FRAME_MS
 from .movement import motion_batch_numpy
+from .style import FEATURE_COUNT, condition_input, draw_style_dropout
+
+# Arrays a worker process needs to build an example (memory-mapped ones travel as paths).
+PORTABLE = ("mel", "summary", "events", "labels", "condition", "style", "style_mask", "mapper")
 
 
 def clock_features(seconds, duration):
@@ -33,6 +37,26 @@ def event_queries(times, previous_times, next_times, duration):
         ],
         axis=-1,
     ).astype(np.float32)
+
+
+def event_queries_v2(times, previous_times, beat_seconds, duration):
+    """Style-v2 queries: the time since the previous object in seconds and in beats, and the
+    tempo. The gap to the next object is not known yet; the rhythm head predicts it."""
+    before = np.maximum(0, times - previous_times)
+    beat_seconds = np.maximum(beat_seconds, 1e-3)
+    return np.concatenate(
+        [
+            clock_features(times, duration),
+            (np.log1p(before) / 3)[..., None],
+            (np.log2(before / beat_seconds + 1 / 16) / 4)[..., None],
+            np.log(beat_seconds / 0.5)[..., None],
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+
+def styled(item):
+    return "style" in item
 
 
 def tasks_for(maps):
@@ -67,21 +91,42 @@ def audio_window(mel, summary, central):
     }
 
 
-def draw_augmentation(rng):
+def draw_augmentation(rng, style=False):
     """Draw one example's augmentation in exactly the order make_example always used.
 
     Drawing ahead of time lets examples be built on worker threads while the shared
-    training RNG stream stays identical to the sequential implementation.
+    training RNG stream stays identical to the sequential implementation. Style-v2 maps
+    additionally hide condition groups/the mapper and mask up to two mel frequency bands.
     """
     flips = (rng.random() < 0.5, rng.random() < 0.5)
     noise = rng.normal(0, 0.006, (EVENT_CONTEXT, 10))
     gain = rng.uniform(0.9, 1.1)
-    return flips, noise, gain
+    if not style:
+        return flips, noise, gain
+    keep, mapper = draw_style_dropout(rng)
+    bands = []
+    for _ in range(2):
+        if rng.random() < 0.5:
+            width = int(rng.integers(1, 7))
+            bands.append((int(rng.integers(0, 64 - width + 1)), width))
+    return flips, noise, gain, keep, mapper, tuple(bands)
 
 
 def make_example(item, central, target_indices, rhythm_weight, rng=None, augmentation=None):
     result = audio_window(item["mel"], item["summary"], central)
-    result["condition"] = item["condition"].copy()
+    version2 = styled(item)
+    if augmentation is None and rng is not None:
+        augmentation = draw_augmentation(rng, version2)
+    if version2:
+        keep, use_mapper, bands = (
+            augmentation[3:6]
+            if augmentation is not None
+            else (np.ones(FEATURE_COUNT, np.float32), True, ())
+        )
+        result["condition"] = condition_input(item["style"], item["style_mask"] * keep)
+        result["mapper"] = np.array(item.get("mapper", 0) if use_mapper else 0, np.float32)
+    else:
+        result["condition"] = item["condition"].copy()
     start, duration = central - AUDIO_MARGIN, len(item["mel"]) * FRAME_MS / 1000
     labels = np.zeros((AUDIO_WINDOW, 6), np.float32)
     left, right = max(0, start), min(len(item["mel"]), start + AUDIO_WINDOW)
@@ -91,7 +136,7 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None, augment
     labels[:, 4] *= central_mask * rhythm_weight
     result["frame_targets"] = labels.T
 
-    rows = np.zeros((EVENT_CONTEXT, 47), np.float32)
+    rows = np.zeros((EVENT_CONTEXT, item["events"].shape[1]), np.float32)
     queries = np.zeros((EVENT_CONTEXT, 20), np.float32)
     valid, mask = np.zeros(EVENT_CONTEXT, np.float32), np.zeros(EVENT_CONTEXT, np.float32)
     if len(target_indices):
@@ -107,13 +152,14 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None, augment
         after = np.where(
             selected + 1 < len(all_times), all_times[np.minimum(len(all_times) - 1, selected + 1)], duration
         )
-        queries[:count] = event_queries(rows[:count, 0], before, after, duration)
+        if version2:
+            queries[:count] = event_queries_v2(rows[:count, 0], before, rows[:count, 47], duration)
+        else:
+            queries[:count] = event_queries(rows[:count, 0], before, after, duration)
     else:
         valid[0] = 1  # Valid BOS prevents all-masked attention in rests.
-    if augmentation is None and rng is not None:
-        augmentation = draw_augmentation(rng)
     if augmentation is not None:
-        flips, noise, gain = augmentation
+        flips, noise, gain = augmentation[:3]
         has_previous = np.any(rows[:, 15:31] != 0, axis=1)
         for axis in (0, 1):
             if flips[axis]:
@@ -131,6 +177,12 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None, augment
         audio -= 1
         np.clip(audio, -1, 1, out=audio)
         audio[:, result["audio_valid"] == 0] = -1
+        if version2:
+            audible = result["audio_valid"] > 0
+            for start, width in augmentation[5]:
+                band = audio[start : start + width]
+                if audible.any():
+                    band[:, audible] = band[:, audible].mean(axis=1, keepdims=True)
     indices = np.flatnonzero(valid)
     rows[indices, 39:47] = motion_batch_numpy(
         rows[indices, 1:9],
@@ -158,6 +210,9 @@ def make_example(item, central, target_indices, rhythm_weight, rng=None, augment
             "event_times": rows[:, 0].copy(),
         }
     )
+    if version2:
+        result["gap_target"] = np.where(valid > 0, rows[:, 48], -1).astype(np.float32)
+        result["beat_seconds"] = np.where(valid > 0, rows[:, 47], 0.5).astype(np.float32)
     return result
 
 
@@ -316,7 +371,13 @@ def batches(maps, batch_size, rng, shuffle, tasks=None, workers=None):
     def plan(start):
         chunk = tasks[start : start + batch_size]
         return [
-            (index, central, indices, weight, draw_augmentation(rng) if shuffle else None)
+            (
+                index,
+                central,
+                indices,
+                weight,
+                draw_augmentation(rng, styled(maps[index])) if shuffle else None,
+            )
             for index, central, indices, weight in chunk
         ]
 
@@ -336,8 +397,7 @@ def batches(maps, batch_size, rng, shuffle, tasks=None, workers=None):
         for index, *rest in planned:
             if index not in sources:
                 sources[index] = {
-                    name: _portable(maps[index][name])
-                    for name in ("mel", "summary", "events", "labels", "condition")
+                    name: _portable(maps[index][name]) for name in PORTABLE if name in maps[index]
                 }
             args.append((sources[index], *rest))
         return args

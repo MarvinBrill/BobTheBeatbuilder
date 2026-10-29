@@ -109,3 +109,68 @@ def test_loss_aggregation_is_independent_of_batch_partition():
             single = {key: value[index : index + 1] for key, value in joined.items()}
             many.add(parts(model, model(single), single))
     assert one.value() == pytest.approx(many.value(), abs=1e-5)
+
+
+def styled_model(slots=4):
+    torch.set_num_threads(2)
+    torch.manual_seed(5)
+    return PhraseMapper(
+        ModelConfig(
+            width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=2, dropout=0,
+            style_version=2, mapper_slots=slots,
+        )  # fmt: skip
+    )
+
+
+def test_styled_model_rhythm_head_is_causal_and_condition_and_mapper_matter():
+    model, batch = styled_model().eval(), probe_batch(styled=True)
+    assert batch["condition"].shape[-1] == 52 and "gap_target" in batch
+    with torch.no_grad():
+        original = model(batch)
+        assert original["gap"].shape[-1] == 27
+        changed = {key: value.clone() for key, value in batch.items()}
+        changed["previous"][:, 8:] += 2
+        changed["queries"][:, 8:] -= 3
+        changed["kind_target"][:, 8:] = 1 - changed["kind_target"][:, 8:]
+        future = model(changed)
+        assert torch.allclose(original["gap"][:, :8], future["gap"][:, :8], atol=1e-6)
+        other = {key: value.clone() for key, value in batch.items()}
+        other["mapper"] = torch.full_like(batch["mapper"], 3)
+        assert not torch.allclose(original["gap"], model(other)["gap"], atol=1e-6)
+        stars = {key: value.clone() for key, value in batch.items()}
+        stars["condition"][:, 0] += 0.5
+        assert not torch.allclose(original["rhythm"], model(stars)["rhythm"], atol=1e-6)
+
+
+def test_styled_objectives_include_rhythm_patterns_and_fit_one_batch():
+    model, batch = styled_model(), probe_batch(styled=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, foreach=False)
+    losses = []
+    for _ in range(14):
+        optimizer.zero_grad()
+        terms = parts(model, model(batch), batch)
+        assert "gap" in terms and terms["gap"][1] > 0
+        loss = objective(terms)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
+        assert model.mapper.weight.grad is not None and model.gap[0].weight.grad is not None
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+        optimizer.step()
+        losses.append(loss.item())
+    assert min(losses[-3:]) < losses[0] - 0.5
+
+
+def test_warm_start_reuses_matching_weights_from_a_legacy_model(tmp_path, monkeypatch):
+    from safetensors.torch import save_file
+    from app.ml import checkpoints
+
+    legacy = tiny_model()
+    folder = tmp_path / "models" / "legacy"
+    folder.mkdir(parents=True)
+    save_file({key: value.contiguous() for key, value in legacy.state_dict().items()}, str(folder / "model.safetensors"))
+    monkeypatch.setattr(checkpoints, "DATA", tmp_path)
+    model = styled_model()
+    result = checkpoints.warm_start(model, "legacy")
+    assert result["copied_tensors"] > 20 and result["new_tensors"] >= 3
+    assert torch.equal(model.audio_front[0].weight, legacy.audio_front[0].weight)
+    assert not torch.equal(model.condition[0].weight[:, :8], legacy.condition[0].weight)

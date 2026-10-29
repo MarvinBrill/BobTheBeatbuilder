@@ -13,6 +13,9 @@ os.environ.setdefault("CUDA_CACHE_PATH", str(DATA / "cache" / "cuda"))
 os.environ.setdefault("TMPDIR", str(DATA / "tmp"))
 BACKEND = os.getenv("BOB_DEVICE", "cpu")
 READER = Path(os.getenv("BOB_READER", DATA / "tools" / "exporter" / "LazerReader.dll"))
+DIFFICULTY = Path(
+    os.getenv("BOB_DIFFICULTY", DATA / "tools" / "difficulty" / "BobDifficulty.dll")
+)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"}
 MAX_UPLOAD = 512 * 1024 * 1024
 

@@ -176,12 +176,48 @@ export function MapPreview({
               setPlaying(false);
             }}
           />
+          {preview.quality?.difficulty && (
+            <p className="fine-print">
+              <b className="result-stars">
+                {preview.quality.difficulty.star_rating.toFixed(2)} ★
+              </b>{" "}
+              nach offizieller osu!-Berechnung · Aim{" "}
+              {preview.quality.difficulty.aim_difficulty?.toFixed(2) ?? "–"} · Speed{" "}
+              {preview.quality.difficulty.speed_difficulty?.toFixed(2) ?? "–"}
+              {preview.quality.difficulty.reading_difficulty !== undefined &&
+                ` · Reading ${preview.quality.difficulty.reading_difficulty.toFixed(2)}`}
+              {preview.quality.calibration && preview.quality.calibration.length > 1 &&
+                ` · ${preview.quality.calibration.length} Durchläufe (${preview.quality.calibration
+                  .map((round) => (round.stars == null ? "–" : round.stars.toFixed(2)))
+                  .join(" → ")})`}
+            </p>
+          )}
+          {preview.quality?.patterns && (
+            <p className="fine-print">
+              Patterns:{" "}
+              {[
+                preview.quality.patterns.burst_share !== undefined &&
+                  `${Math.round(preview.quality.patterns.burst_share * 100)} % Bursts`,
+                preview.quality.patterns.stream_share !== undefined &&
+                  `${Math.round(preview.quality.patterns.stream_share * 100)} % Streams`,
+                preview.quality.patterns.jump_spacing !== undefined &&
+                  `1/2-Sprünge ~${Math.round(preview.quality.patterns.jump_spacing)} px`,
+                preview.quality.patterns.slider_ratio !== undefined &&
+                  `${Math.round(preview.quality.patterns.slider_ratio * 100)} % Slider`,
+                preview.quality.patterns.density !== undefined &&
+                  `${preview.quality.patterns.density.toFixed(1)} Objekte/s`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
           {preview.quality && (
             <p className="fine-print">
               Timing:{" "}
               {{
                 manual: "manuell",
                 learned: "gelernt",
+                reference: "vorgegeben",
                 "audio-fallback": "Audio-Schätzung",
               }[preview.quality.timing_source] || preview.quality.timing_source}
               {", "}

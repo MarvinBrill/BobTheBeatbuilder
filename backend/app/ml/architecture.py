@@ -44,6 +44,10 @@ class ModelConfig:
     decoder_layers: int = 4
     mixtures: int = 8
     dropout: float = 0.1
+    # 1: legacy eight-value condition. 2: measured style with masks, star rating, mapper
+    # embedding and a rhythm-pattern head that chooses the next note on the beat grid.
+    style_version: int = 1
+    mapper_slots: int = 1
 
     def dictionary(self):
         return asdict(self)
@@ -59,4 +63,8 @@ class ModelConfig:
             raise ValueError("Invalid model depth")
         if not 2 <= result.mixtures <= 16 or not 0 <= result.dropout <= 0.3:
             raise ValueError("Invalid mixture/dropout configuration")
+        if result.style_version not in (1, 2) or not 1 <= result.mapper_slots <= 4096:
+            raise ValueError("Invalid style configuration")
+        if result.style_version == 1 and result.mapper_slots != 1:
+            raise ValueError("Legacy models have no mapper embedding")
         return result

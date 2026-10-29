@@ -13,6 +13,8 @@ import { isActive } from "./jobs";
 import { usePendingJob } from "./usePendingJob";
 import { Slider } from "../components/Controls";
 import { StudioAdvanced, defaultAdvanced } from "./StudioAdvanced";
+import { StudioStyle, defaultTarget, type StyleTarget } from "./StudioStyle";
+import { isStyled, starProfile, typicalSettings } from "./styleControls";
 import { MapPreview } from "../components/MapPreview";
 import type { Device, Hardware, State } from "../types";
 import { GeneratedMaps } from "./GeneratedMaps";
@@ -66,12 +68,33 @@ export function Studio({
     flow: 0.5,
   });
   const [advanced, setAdvanced] = useState(defaultAdvanced);
+  const [target, setTarget] = useState<StyleTarget>(defaultTarget);
   const [previewId, setPreviewId] = useState("");
   const outputs = state.outputs.filter((output) => output.objects);
   const selectedModel =
     state.models.find((item) => item.id === model)?.id ||
     state.models[0]?.id ||
     "";
+  const modelRecord = state.models.find((item) => item.id === selectedModel);
+  const styled = isStyled(modelRecord);
+  const calculatorReady = !!state.difficulty_ready;
+  const typical =
+    (target.useTarget ? starProfile(modelRecord, target.stars)?.style : undefined) || {};
+
+  /** AR, OD, HP and CS typical for a star rating in this model's training data. */
+  function applyStars(stars: number) {
+    const profile = starProfile(modelRecord, stars)?.style;
+    const fallback = typicalSettings(stars);
+    const pick = (key: "ar" | "od" | "hp" | "cs") =>
+      Math.round((profile?.[key] ?? fallback[key]) * 10) / 10;
+    setParams((current) => ({
+      ...current,
+      ar: pick("ar"),
+      od: pick("od"),
+      hp: pick("hp"),
+      cs: pick("cs"),
+    }));
+  }
   const deletionBlocked = state.deletion_blocked;
   const selectedOutput =
     outputs.find((output) => output.id === previewId) || outputs[0];
@@ -144,6 +167,16 @@ export function Studio({
         ...params,
         ...advanced,
         bpm: advanced.bpm ? Number(advanced.bpm) : null,
+        target_stars: target.useTarget ? target.stars : null,
+        calibrate: target.useTarget && target.calibrate && calculatorReady,
+        calibration_rounds: target.rounds,
+        ...(styled
+          ? {
+              aim_share: target.aimShare,
+              mapper: target.mapper || null,
+              style: target.style,
+            }
+          : {}),
       });
       pendingJob.track(job);
       refresh();
@@ -278,6 +311,17 @@ export function Studio({
               </h2>
               <span className="section-number">02</span>
             </div>
+            {styled && (
+              <StudioStyle
+                model={modelRecord}
+                value={target}
+                onChange={setTarget}
+                onStars={applyStars}
+                calculatorReady={calculatorReady}
+                typical={typical}
+              />
+            )}
+            {!styled && (
             <div
               className="preset-row"
               role="group"
@@ -305,6 +349,7 @@ export function Studio({
                 </button>
               ))}
             </div>
+            )}
             <div className="slider-grid">
               {(["ar", "cs", "od", "hp"] as const).map((key) => (
                 <Slider
@@ -319,10 +364,13 @@ export function Studio({
                     }[key]
                   }
                   value={params[key]}
+                  step={0.1}
                   onChange={(value) => setParams({ ...params, [key]: value })}
                 />
               ))}
             </div>
+            {!styled && (
+            <>
             <Slider
               label="Objektdichte · pro Sekunde"
               help={generationHelp.density}
@@ -365,7 +413,24 @@ export function Studio({
               onChange={(slider_bias) => setParams({ ...params, slider_bias })}
               hint="0: nur Circles. 1: Slider bevorzugen; sehr kurze Abstände können trotzdem Circles erfordern."
             />
+            <StudioStyle
+              model={modelRecord}
+              value={target}
+              onChange={setTarget}
+              onStars={applyStars}
+              calculatorReady={calculatorReady}
+              legacy
+            />
+            <p className="fine-print">
+              Dieses Modell wurde vor der Sterne-, Pattern- und Mapper-Steuerung
+              trainiert. Trainiere ein neues Modell (gern mit diesem als
+              Startpunkt), um Ziel-Sterne, Mapper-Stil und Patterns direkt zu
+              steuern.
+            </p>
+            </>
+            )}
             <StudioAdvanced
+              styled={styled}
               value={advanced}
               onChange={setAdvanced}
               device={device}
@@ -394,8 +459,9 @@ export function Studio({
               />
             )}
             <p className="fine-print">
-              Erstellt einen Beatmap-Entwurf. Presets sind keine garantierten
-              Sternebewertungen.
+              Erstellt einen Beatmap-Entwurf. Mit Kalibrierung wird die fertige
+              Map mit der offiziellen osu!-Berechnung gemessen; bis ±0,15 ★ gilt
+              als getroffen, sonst wird der beste Durchlauf behalten.
             </p>
           </section>
         </div>

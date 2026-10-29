@@ -9,6 +9,7 @@ import { activeJob, jobMessage, isActive, scrollToActivity, statusLabel } from "
 import { usePendingJob } from "./usePendingJob";
 import { DeviceSelect } from "../components/Controls";
 import type { Device, Hardware, State } from "../types";
+import { isStyled } from "./styleControls";
 
 export function Training({
   state,
@@ -37,6 +38,8 @@ export function Training({
   const [contextRobustness, setContextRobustness] = useState(false);
   const [rolloutValidation, setRolloutValidation] = useState(true);
   const [resumeId, setResumeId] = useState("");
+  const [initId, setInitId] = useState("");
+  const [mapperMinimum, setMapperMinimum] = useState(10);
   const [seed, setSeed] = useState(42);
   const [device, setDevice] = useState<Device>(state.device);
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +58,10 @@ export function Training({
     learningRate:
       !Number.isFinite(learningRate) || learningRate <= 0 || learningRate > 0.01,
     seed: !Number.isInteger(seed) || seed < 0,
+    mapperMinimum:
+      !Number.isInteger(mapperMinimum) || mapperMinimum < 2 || mapperMinimum > 1000,
   };
+  const base = state.models.find((model) => model.id === initId);
   const reason = running
     ? `„${running.name}“ trainiert gerade. Ein weiteres Training startet erst danach; abbrechen kannst du unter Aktivität.`
     : !selected
@@ -72,7 +78,9 @@ export function Training({
                 ? "Lernrate: größer als 0 und höchstens 0,01."
                 : invalid.seed
                   ? "Seed: ganze Zahl ab 0."
-                  : "";
+                  : invalid.mapperMinimum
+                    ? "Mapper ab: ganze Zahl von 2 bis 1000."
+                    : "";
 
   async function start() {
     setSubmitting(true);
@@ -88,6 +96,8 @@ export function Training({
         model_size: modelSize,
         gradient_accumulation: accumulation,
         resume_model_id: resumeId || null,
+        init_model_id: resumeId ? null : initId || null,
+        mapper_min_maps: mapperMinimum,
         precision: device === "cuda" ? precision : "auto",
         cuda_graphs: cudaGraphs,
         context_robustness: contextRobustness,
@@ -215,15 +225,19 @@ export function Training({
               Modellgröße
               <select
                 value={modelSize}
-                disabled={!!resumeId}
+                disabled={!!resumeId || !!initId}
                 onChange={(event) => setModelSize(event.target.value)}
               >
                 <option value="compact">Kompakt (weniger Speicher)</option>
                 <option value="standard">Standard (empfohlen)</option>
                 <option value="large">Groß (mehr Kapazität)</option>
               </select>
-              {resumeId && (
-                <small>Beim Fortsetzen bleibt die Größe des Trainingsstands.</small>
+              {(resumeId || initId) && (
+                <small>
+                  {resumeId
+                    ? "Beim Fortsetzen bleibt die Größe des Trainingsstands."
+                    : "Die Größe kommt vom Startmodell, damit seine Gewichte passen."}
+                </small>
               )}
             </label>
             <label>
@@ -251,7 +265,9 @@ export function Training({
               {state.models
                 .filter(
                   (model) =>
-                    model.continuable && model.dataset_id === selected?.id,
+                    model.continuable &&
+                    model.dataset_id === selected?.id &&
+                    isStyled(model),
                 )
                 .map((model) => (
                   <option key={model.id} value={model.id}>
@@ -259,6 +275,27 @@ export function Training({
                   </option>
                 ))}
             </select>
+          </label>
+          <label>
+            Startpunkt
+            <select
+              value={resumeId ? "" : initId}
+              disabled={!!resumeId}
+              onChange={(event) => setInitId(event.target.value)}
+            >
+              <option value="">Zufällig initialisiert</option>
+              {state.models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  Gewichte übernehmen: {model.name}
+                  {isStyled(model) ? "" : " (älteres Modell)"}
+                </option>
+              ))}
+            </select>
+            <small>
+              {base
+                ? "Audio-, Rhythmus- und Positionsgewichte werden übernommen; Sterne-, Stil-, Mapper- und Rhythmus-Pattern-Teile lernen neu. Für Feintuning auf einen Mapper oder eine Sterne-Spanne: kleineren Datensatz wählen und Lernrate auf 0,0001 senken."
+                : "Ein Startmodell spart viel Trainingszeit. Auch ältere Modelle ohne Sterne-Steuerung eignen sich."}
+            </small>
           </label>
           <div className="field-row">
             <label>
@@ -310,6 +347,21 @@ export function Training({
               />
             </label>
           </div>
+          <label>
+            Mapper-Profil ab
+            <input
+              type="number"
+              min={2}
+              max={1000}
+              value={mapperMinimum}
+              aria-invalid={invalid.mapperMinimum}
+              onChange={(event) => setMapperMinimum(Number(event.target.value))}
+            />
+            <small>
+              Mindestanzahl Trainingsmaps, damit ein Mapper ein eigenes gelerntes
+              Profil bekommt. Gast-Difficulties zählen für den Gast-Mapper.
+            </small>
+          </label>
           <label className="checkbox-label">
             <input
               type="checkbox"
@@ -424,6 +476,15 @@ export function Training({
                 Generierungen prüfen zusätzlich die eigene Bewegungsfolge.
               </p>
             )}
+            {latest?.metrics.at(-1)?.rhythm_accuracy !== undefined && (
+              <p className="fine-print">
+                Rhythmus-Patterns auf Prüfsongs: nächster Abstand exakt{" "}
+                {((latest.metrics.at(-1)?.rhythm_accuracy ?? 0) * 100).toFixed(1)} %,
+                unter den Top 3{" "}
+                {((latest.metrics.at(-1)?.rhythm_top3_accuracy ?? 0) * 100).toFixed(1)}{" "}
+                %. Mehrere Rhythmen können zur selben Musik passen.
+              </p>
+            )}
             {latest?.metrics.at(-1)?.onset_f1 !== undefined && (
               <p className="fine-print">
                 Notenzeitpunkte auf Prüfsongs (±35 ms): F1{" "}
@@ -462,6 +523,15 @@ export function Training({
                 <b>Kandidaten prüfen</b>Mehrere Platzierungen werden nach
                 gelerntem Kontext, Bewegung und Lesbarkeit verglichen. Der
                 Export prüft Grenzen, Slider-Zeiten und Überlappungen.
+              </p>
+            </div>
+            <div>
+              <span>04</span>
+              <p>
+                <b>Sterne, Patterns, Mapper</b>Jede Trainingsmap wird
+                vermessen: offizielles Star Rating (Aim/Speed), Bursts, Streams,
+                Sprungweiten, Winkel, Slider. Dazu ein gelerntes Profil pro
+                Mapper. Beim Generieren steuerst du genau diese Werte.
               </p>
             </div>
             <p className="muted">

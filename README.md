@@ -18,6 +18,9 @@ Beatmaps + audio → curated dataset → train one model → new audio → .osz 
 - Search, star-range filters, cross-page selection, and **one difficulty per song**: easiest, middle, or hardest.
 - Local training on **CUDA, DirectML, or CPU**, with learning curves, validation, throughput, and GPU memory statistics.
 - A single model for rhythm and movement, using extended audio context and autoregressive object history.
+- **Target star rating**: every training map gets its official star rating (aim, speed, reading) from the same `ppy.osu.Game.Rulesets.Osu` library lazer uses; generated maps are measured the same way and can be re-generated until they land within ±0.15 ★.
+- **Mapper styles**: guest difficulties are credited to the guest mapper ("NiNo's Insane" in a Sotarks set counts for NiNo); mappers with enough maps get a learned embedding plus a measured style profile.
+- **Pattern controls**: bursts, streams, stream length and spacing, 1/2 jump distance, sharp vs. linear angles, stacks, slider share/velocity/kick sliders, combo length, aim/speed balance. The decoder chooses the rhythm itself on the beat grid, so triples, bursts, streams and 1/2 jump sections are learned as sequences.
 - Generation controls for AR, CS, OD, HP, density, slider preference, spacing, directional flow, variation, and timing.
 - Audio/playfield preview, volume control, and `.osz` export for osu!lazer.
 - Model download/import using Safetensors weights and metadata.
@@ -59,6 +62,8 @@ Install these prerequisites and make them available on `PATH`:
 | .NET SDK | 10, to build the lazer reader |
 | FFmpeg | Audio decoding and export |
 | NVIDIA driver | Compatible with the CUDA 12.8 PyTorch build |
+
+Setup also builds the star rating calculator (`difficulty/`), which downloads the official osu! rulesets from NuGet once.
 
 From PowerShell in the repository:
 
@@ -123,7 +128,7 @@ For a CPU container, use `docker compose up --build`. The Compose files are stan
 
 Supported audio: **MP3, WAV, OGG, FLAC, M4A, AAC, and Opus**, from **1 second to 20 minutes**, up to **512 MiB** per upload. Generated archives include Ogg Vorbis audio. Artwork, storyboards, and custom hitsounds are not included in training exports.
 
-**Star ratings** come from lazer's stored no-mod ratings, rounded to two decimals; they may lag behind newer difficulty calculations. Plain `.osu`/`.osz` files do not supply a rating. Unknown ratings are excluded by star-range and single-difficulty-per-song filters, but remain available in the unfiltered all-maps view.
+**Star ratings** are calculated for every imported map with the official osu! difficulty calculator (`ppy.osu.Game.Rulesets.Osu`, no mods), including stable Songs folders and `.osz` files that store no rating. Use **Star Ratings → Fehlende Sterne berechnen** in the library once for maps imported before this feature; datasets are completed automatically when training starts. A lazer rating stays available as `lazer_star_rating`. Unknown ratings are excluded by star-range and single-difficulty-per-song filters, but remain available in the unfiltered all-maps view.
 
 ## Training guidance
 
@@ -132,13 +137,19 @@ Prefer diverse songs and consistent mapping standards. Hundreds of different son
 | Setting | Practical CUDA starting point |
 | --- | --- |
 | Model size | Standard, approximately 11.3M parameters |
-| Batch size | 8; reduce if GPU memory runs out |
+| Batch size | 8–16; reduce if GPU memory runs out |
 | Gradient accumulation | 1 for CUDA Graphs |
 | Precision | Automatic / BF16 when supported |
-| Learning rate | `0.0003` |
+| Learning rate | `0.0003`; `0.0001` when fine-tuning from a start model |
+| Start model | Optional: reuse an earlier model's audio/decoder weights |
+| Mapper profile from | 10 training maps per mapper |
 | Epochs | Up to 100; early stopping may finish sooner |
 | Own-position training | Leave the experimental option off initially |
 | Free-generation validation | Enabled |
+
+A higher learning rate on the large model overfits the onset branch within a few epochs: the rhythm validation loss rises while the training loss keeps falling. Keep all difficulties in the dataset; the star-rating condition separates Easy from Extra.
+
+**Fine-tuning** on one mapper or one star range: create a smaller dataset in the library, choose the general model as **Startpunkt**, lower the learning rate to `0.0001` and train for a few epochs.
 
 Compact has approximately **2.3M** parameters and Large **33.4M**. More capacity can learn richer patterns, but also overfit; it is not automatically better.
 
@@ -155,7 +166,7 @@ Compact has approximately **2.3M** parameters and Large **33.4M**. More capacity
 
 The Phrase Mapper combines a hierarchical audio Transformer with a causal object decoder: roughly **24 seconds of detailed audio context**, **128 song-summary tokens**, and up to **128 previous hit objects**. A single inference checkpoint predicts rhythm and object properties, including cubic slider geometry.
 
-Generation combines learned predictions with timing selection and playability constraints. Density can vary across musical sections within your overall density preference. Slider preference is not a guaranteed percentage. **OD controls hit-window strictness, not a target star rating.** Presets do not guarantee an official difficulty rating.
+Generation combines learned predictions with timing selection and playability constraints. Models trained with style conditioning (style v2) choose each next note from beat-grid gap classes (1/8 to 8 beats plus pauses), combined with the onset prediction; older models keep the previous onset selection. With **target stars** and calibration, the finished map is measured with the official calculator and re-generated (up to five rounds) until it is within ±0.15 ★; the closest round is kept. Pattern values left on automatic are inferred from the music, the target stars and the mapper. Enter BPM and offset manually when you know them: automatic timing can fall back to a constant-tempo estimate.
 
 - **osu!standard only.** Mania, taiko, and catch are unsupported; spinners are not generated.
 - Slider targets use one cubic Bézier approximation, 1–4 traversals, and discrete durations up to 16 beats. Unsupported geometry still contributes its start position and object type, but not its curve target.

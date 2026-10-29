@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   RefreshCw,
   Search,
+  Star,
   Upload,
   X,
 } from "lucide-react";
@@ -46,7 +47,7 @@ export function Library({
   const [path, setPath] = useState(state.default_path);
   const [directory, setDirectory] = useState<Directory | null>(null);
   const revision = `${state.map_count}:${state.jobs
-    .filter((job) => ["scan", "import"].includes(job.kind))
+    .filter((job) => ["scan", "import", "stars"].includes(job.kind))
     .map((job) => `${job.id}:${job.status}`)
     .join(",")}`;
   const {
@@ -70,17 +71,21 @@ export function Library({
   const [name, setName] = useState("Meine Mapping-Library");
   /** Which request is in flight: one at a time, each with its own spinner. */
   const [request, setRequest] = useState<
-    "" | "browse" | "scan" | "dataset" | "export"
+    "" | "browse" | "scan" | "dataset" | "export" | "stars"
   >("");
-  const [lastJob, setLastJob] = useState<"" | "scan" | "dataset" | "export">("");
+  const [lastJob, setLastJob] = useState<
+    "" | "scan" | "dataset" | "export" | "stars"
+  >("");
   const pendingJob = usePendingJob(state.jobs);
   const busy = request || (pendingJob.waiting ? lastJob : "");
   const [uploading, setUploading] = useState<number | null>(null);
   const scanning = activeJob(state.jobs, "scan");
   const importing = activeJob(state.jobs, "import");
+  const rating = activeJob(state.jobs, "stars");
+  const lastRating = state.jobs.find((job) => job.kind === "stars");
 
   async function action(
-    kind: "scan" | "dataset" | "export",
+    kind: "scan" | "dataset" | "export" | "stars",
     operation: () => Promise<unknown>,
   ) {
     setRequest(kind);
@@ -313,6 +318,44 @@ export function Library({
             Es werden nur osu!standard-Maps aufgenommen. Andere Spielmodi
             bleiben außen vor.
           </p>
+        </section>
+        <section className="panel stars-panel">
+          <div className="panel-heading">
+            <h2>
+              <Star size={18} aria-hidden="true" /> Star Ratings
+            </h2>
+            <span className="tag">offizielle osu!-Berechnung</span>
+          </div>
+          <p className="muted">
+            stable-Songs-Ordner speichern keine Sterne. Bob berechnet sie mit
+            derselben Bibliothek wie osu!lazer (Aim, Speed, Reading) und nutzt
+            sie für Filter, Training und Ziel-Sterne. Neue Importe werden
+            automatisch berechnet.
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!state.difficulty_ready || !!busy || !!rating}
+            aria-busy={busy === "stars" || !!rating}
+            aria-describedby="stars-hint"
+            onClick={() => void action("stars", () => api("/maps/stars", {}))}
+          >
+            <BusyIcon busy={busy === "stars" || !!rating} icon={Star} />
+            {rating ? "Sterne werden berechnet …" : "Fehlende Sterne berechnen"}
+          </button>
+          <ActionHint id="stars-hint">
+            {!state.difficulty_ready
+              ? "Der Sterne-Rechner fehlt. Führe scripts/setup.ps1 erneut aus."
+              : lastRating?.status === "completed" && lastRating.result
+                ? `${lastRating.result.calculated ?? 0} Maps berechnet${lastRating.result.failed ? `, ${lastRating.result.failed} nicht berechenbar` : ""}.`
+                : ""}
+          </ActionHint>
+          {rating && (
+            <ProgressLine
+              value={rating.progress}
+              label={jobMessage(rating) || "Sterne werden berechnet"}
+            />
+          )}
         </section>
       </div>
       <section className="panel library-table" aria-busy={loading}>

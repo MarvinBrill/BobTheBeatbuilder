@@ -6,7 +6,7 @@ $python = Join-Path $repoRoot "data/venv-$Device/Scripts/python.exe"
 if (!(Test-Path -LiteralPath $python) -and (Test-Path data/venv/Scripts/python.exe)) {
     $python = Join-Path $repoRoot 'data/venv/Scripts/python.exe'
 }
-if (!(Test-Path -LiteralPath $python) -or !(Test-Path frontend/dist/index.html) -or !(Test-Path data/tools/exporter/LazerReader.dll)) {
+if (!(Test-Path -LiteralPath $python) -or !(Test-Path frontend/dist/index.html) -or !(Test-Path data/tools/exporter/LazerReader.dll) -or !(Test-Path data/tools/difficulty/BobDifficulty.dll)) {
     & "$PSScriptRoot/setup.ps1" -Device $Device
 }
 $env:BOB_DATA = Join-Path $repoRoot 'data'

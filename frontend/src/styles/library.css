@@ -4,6 +4,12 @@
   gap: 22px;
   margin-bottom: 23px;
 }
+.stars-panel {
+  grid-column: 1 / -1;
+}
+.stars-panel .muted {
+  margin-top: 0;
+}
 .input-action {
   display: flex;
   gap: 8px;

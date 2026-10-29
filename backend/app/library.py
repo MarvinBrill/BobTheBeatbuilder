@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
-from . import store
+from . import difficulty, store
 from .artifacts import artifact_directory
 from .ml.split import song_groups
 from .beatmaps import parse
@@ -50,12 +51,15 @@ def register(map_path, audio_path, source, source_id="", stars=None):
         source_id,
         star_rating(stars),
     )
-    if item["star_rating"] is None and source != "lazer":
+    try:
+        item = carry_over(item, store.get("map", item["id"]))
+    except ValueError:
+        pass
+    if difficulty.available() and difficulty.needs_attributes(item):
         try:
-            known = store.get("map", item["id"])
-            item = with_rating(item, star_rating(known.get("star_rating")))
+            item = difficulty.with_attributes(item, difficulty.calculate_one(map_path))
         except ValueError:
-            pass
+            logging.exception("Star rating calculation failed for %s", map_path)
     return store.save("map", item)
 
 
@@ -158,18 +162,41 @@ def register_many(candidates, context, start=0.0, end=1.0, audio_first=False):
             )
     finally:
         hasher.close()
-    # Content identical to an earlier import keeps its known lazer rating.
-    known = store.get_many("map", [item["id"] for item in items if unrated(item)])
-    items = [
-        with_rating(item, star_rating(known[item["id"]].get("star_rating")))
-        if unrated(item) and item["id"] in known
-        else item
-        for item in items
-    ]
-    context.report(start + 0.95 * (end - start), f"Saving {len(items)} maps")
+    # Content identical to an earlier import keeps its known rating and calculated attributes.
+    known = store.get_many("map", [item["id"] for item in items])
+    items = [carry_over(item, known.get(item["id"])) for item in items]
+    items = calculate_stars(items, context, start + 0.95 * (end - start), start + 0.99 * (end - start))
+    context.report(start + 0.99 * (end - start), f"Saving {len(items)} maps")
     store.save_many("map", items)
     errors.sort(key=lambda entry: entry[0])
     return len(items), skipped, [message for _, message in errors]
+
+
+def carry_over(item, previous):
+    if not previous:
+        return item
+    if unrated(item) and previous.get("star_source") == "lazer":
+        item = with_rating(item, star_rating(previous.get("star_rating")))
+    if previous.get("difficulty_attributes"):
+        item = difficulty.with_attributes(
+            {**item, "lazer_star_rating": previous.get("lazer_star_rating")}
+            if previous.get("lazer_star_rating") is not None
+            else item,
+            previous["difficulty_attributes"],
+        )
+    return item
+
+
+def calculate_stars(items, context, start, end):
+    """Official star ratings for new maps. A missing calculator never blocks an import."""
+    if not difficulty.available():
+        return items
+    try:
+        updated, _ = difficulty.annotate(items, context, (start, end))
+        return updated
+    except ValueError:
+        logging.exception("Star rating calculation failed; maps are imported without it")
+        return items
 
 
 def hash_path(root, value):

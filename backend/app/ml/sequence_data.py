@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 from uuid import uuid4
 import numpy as np
@@ -11,11 +12,13 @@ from .architecture import GLOBAL_TOKENS, DURATION_BEATS
 from .network import conditions
 from .split import song_groups
 from .movement import history_context, motion_numpy
-from . import preparation_cache
+from . import preparation_cache, style
 
 # Packed event rows: time, geometry(8), kind, seconds, duration class, repeat class,
-# combo, geometry mask, previous event(16), motion context(8), movement(8).
-EVENT_COLUMNS = 47
+# combo, geometry mask, previous event(16), motion context(8), movement(8),
+# beat length in seconds, rhythm class of the gap to the next object (-1: none).
+EVENT_COLUMNS = 49
+LEGACY_COLUMNS = 47
 
 
 def cached_array(name, values):
@@ -80,10 +83,25 @@ def event_features(obj, previous=None):
     )
 
 
+def next_gap_classes(beatmap):
+    """Rhythm target per object: the beat-relative gap to the following object."""
+    objects, result = beatmap.objects, []
+    for index, obj in enumerate(objects):
+        if index + 1 == len(objects):
+            result.append(-1)
+            continue
+        following = objects[index + 1]
+        # A spinner between both objects is not a rhythm decision the decoder makes.
+        interrupted = any(obj.time < start < following.time for start, _ in beatmap.ignored)
+        result.append(-1 if interrupted else style.gap_class(following.time - obj.time, obj.beat_length))
+    return result
+
+
 def pack_events(beatmap, frame_count):
     rows, history, rejected_geometry = [], [], 0
     frames = set()
-    for obj in beatmap.objects:
+    gaps = next_gap_classes(beatmap)
+    for index, obj in enumerate(beatmap.objects):
         frame = round(obj.time / FRAME_MS)
         if frame < 0 or frame >= frame_count or not 0 <= obj.x <= 512 or not 0 <= obj.y <= 384:
             raise ValueError("Object outside audio or playfield")
@@ -124,6 +142,8 @@ def pack_events(beatmap, frame_count):
                 *previous,
                 *context,
                 *motion,
+                obj.beat_length / 1000,
+                gaps[index],
             ]
         )
         history.append(obj)
@@ -163,6 +183,16 @@ def frame_labels(beatmap, frame_count):
     return target
 
 
+def attribute_signature(record):
+    """Cached style values depend on the calculated stars, not only on the file contents."""
+    attributes = record.get("difficulty_attributes") or {}
+    return hashlib.sha256(json.dumps(attributes, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def red_lines(beatmap):
+    return [[float(time), float(beat)] for time, beat, inherited in beatmap.timing if not inherited][:64]
+
+
 def prepare_serial(records, context, issues=None):
     issues = issues if issues is not None else []
     prepared, groups = [], song_groups(records)
@@ -184,7 +214,8 @@ def prepare_serial(records, context, issues=None):
                     raise ValueError("Silent audio")
                 audio_summaries[audio_hash] = (mel, summary_features(mel))
             mel, summary = audio_summaries[audio_hash]
-            cached = preparation_cache.load(key, len(mel))
+            signature = attribute_signature(record)
+            cached = preparation_cache.load(key, len(mel), signature)
             identity = {
                 "mel": mel,
                 "summary": summary,
@@ -217,13 +248,20 @@ def prepare_serial(records, context, issues=None):
                 ),
                 slider_bias=float(events[:, 9].mean()),
             )
+            values, mask = style.vector(style.measure(beatmap, record.get("difficulty_attributes")))
             prepared.append(
                 {
                     "mel": mel,
-                    "events": cached_array(f"phrase-events-v3-final-{key}.npy", events),
+                    "events": cached_array(f"phrase-events-v4-{key}.npy", events),
                     "labels": cached_array(f"phrase-labels-v3-{key}.npy", labels),
                     "summary": summary,
                     "condition": np.array(conditions(params), np.float32),
+                    "style": values,
+                    "style_mask": mask,
+                    "mapper_candidate": style.mapper_candidate(beatmap.metadata.get("Version")),
+                    "creator": beatmap.metadata.get("Creator", ""),
+                    "timing": red_lines(beatmap),
+                    "attribute_signature": signature,
                     "song": groups[index],
                     "audio_hash": audio_hash,
                     "audio_path": str(audio_path),

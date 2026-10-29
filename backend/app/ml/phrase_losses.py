@@ -18,6 +18,15 @@ def categorical(logits, target):
     return torch.log(torch.exp(shifted).sum(-1)) - (shifted * one_hot).sum(-1)
 
 
+def smoothed_categorical(logits, target, smoothing=0.05):
+    """Cross-entropy with label smoothing: neighbouring rhythms are often equally valid."""
+    shifted = logits - logits.max(dim=-1, keepdim=True).values.detach()
+    log_total = torch.log(torch.exp(shifted).sum(-1))
+    return (1 - smoothing) * categorical(logits, target) + smoothing * (
+        log_total - shifted.mean(-1)
+    )
+
+
 def mixture_parameters(raw, mixtures):
     values = raw.reshape(*raw.shape[:-1], mixtures, 1 + 2 * GEOMETRY_SIZE)
     weights = torch.log_softmax(values[..., 0], dim=-1)
@@ -114,6 +123,11 @@ def parts(model, output, batch, onset_weight=20):
         "flow": term(movement_error, mask * batch["geometry_valid"], 0.15),
         "compatibility": term(ranking, pair_mask, 0.1),
     }
+    if "gap" in output:
+        gap_valid = mask * (batch["gap_target"] >= 0).to(mask.dtype)
+        terms["gap"] = term(
+            smoothed_categorical(output["gap"], batch["gap_target"].clamp(min=0)), gap_valid, 0.5
+        )
     if "robust_geometry" in output:
         from .context_training import auxiliary_terms
 

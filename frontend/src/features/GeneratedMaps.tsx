@@ -49,6 +49,14 @@ export function GeneratedMaps({
                 <span>
                   {output.name}
                   <small>
+                    {output.stars != null && (
+                      <span className="result-stars">
+                        {output.stars.toFixed(2)} ★
+                        {output.target_stars != null &&
+                          ` (Ziel ${output.target_stars.toFixed(1)})`}
+                        {", "}
+                      </span>
+                    )}
                     {output.objects} Objekte, {output.bpm} BPM
                   </small>
                 </span>

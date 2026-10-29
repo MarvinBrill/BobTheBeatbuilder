@@ -7,11 +7,16 @@ const groups = {
   geometry: "Positionen und Kurven",
   structure: "Objekttyp und Slider-Dauer",
   movement: "Bewegung und Zusammenhang",
+  pattern: "Rhythmus-Patterns",
 };
 
 export function LossChart({ metrics }: { metrics: Metric[] }) {
   const [group, setGroup] = useState("total");
   const separate = metrics.some((metric) => metric.train_groups);
+  const available = Object.entries(groups).filter(
+    ([key]) =>
+      key === "total" || metrics.some((metric) => metric.train_groups?.[key] !== undefined),
+  );
   const displayed =
     group === "total" || !separate
       ? metrics
@@ -55,7 +60,7 @@ export function LossChart({ metrics }: { metrics: Metric[] }) {
             value={group}
             onChange={(event) => setGroup(event.target.value)}
           >
-            {Object.entries(groups).map(([key, label]) => (
+            {available.map(([key, label]) => (
               <option key={key} value={key}>
                 {label}
               </option>

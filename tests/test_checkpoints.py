@@ -52,6 +52,7 @@ def test_cancelled_training_is_preserved_and_can_continue(monkeypatch):
     from app.ml import training
     from app.ml.sequence_data import pack_events, frame_labels, summary_features
     from app.beatmaps import Beatmap, HitObject
+    from app.ml import style
 
     torch.set_num_threads(2)
     mel = np.zeros((1024, 64), np.float32)
@@ -62,12 +63,17 @@ def test_cancelled_training_is_preserved_and_can_continue(monkeypatch):
         timing=[(0, 500, False)],
     )
     events, _ = pack_events(beatmap, len(mel))
+    values, mask = style.vector({"ar": 8, "cs": 4, "od": 6, "hp": 5, "tempo": 120})
     item = dict(
         mel=mel,
         events=events,
         labels=frame_labels(beatmap, len(mel)),
         summary=summary_features(mel),
         condition=np.full(8, 0.5, np.float32),
+        style=values,
+        style_mask=mask,
+        creator="Tester",
+        mapper_candidate=None,
         masked_geometry=0,
         audio_hash="cancel-test",
         map_hash="cancel-test",
@@ -79,7 +85,13 @@ def test_cancelled_training_is_preserved_and_can_continue(monkeypatch):
         training,
         "configuration",
         lambda _: ModelConfig(
-            width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=1, dropout=0
+            width=64,
+            heads=2,
+            audio_layers=1,
+            global_layers=1,
+            decoder_layers=1,
+            dropout=0,
+            style_version=2,
         ),
     )
     store.save("dataset", dict(id="cancel-dataset", maps=[]))

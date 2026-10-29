@@ -7,7 +7,7 @@ from .architecture import CENTRAL_FRAMES, AUDIO_MARGIN
 from .sequence_batches import audio_window
 
 
-def encode_window(model, mel, summary, condition, central, selected_device):
+def encode_window(model, mel, summary, condition, central, selected_device, mapper=None):
     values = audio_window(mel, summary, central)
     batch = {
         key: torch.from_numpy(value.copy()).unsqueeze(0).to(selected_device) for key, value in values.items()
@@ -20,14 +20,17 @@ def encode_window(model, mel, summary, condition, central, selected_device):
             batch["audio_times"],
             batch["global_times"],
             batch["audio_valid"],
+            mapper,
         )
 
 
-def predict_rhythm(model, mel, summary, condition, selected_device, context):
+def predict_rhythm(model, mel, summary, condition, selected_device, context, mapper=None):
     output = np.empty((len(mel), 4), np.float32)
     for central in range(0, len(mel), CENTRAL_FRAMES):
         context.report(0.05 + 0.3 * central / len(mel), "Musikalischen Verlauf analysieren")
-        _, _, rhythm = encode_window(model, mel, summary, condition, central, selected_device)
+        _, _, rhythm = encode_window(
+            model, mel, summary, condition, central, selected_device, mapper
+        )
         count = min(CENTRAL_FRAMES, len(mel) - central)
         output[central : central + count] = rhythm[0, :, AUDIO_MARGIN : AUDIO_MARGIN + count].cpu().numpy().T
     if not np.isfinite(output).all():
@@ -37,6 +40,12 @@ def predict_rhythm(model, mel, summary, condition, selected_device, context):
 
 
 def timing_map(prediction, audio_path, settings):
+    if settings.get("timing"):
+        # Red lines given explicitly, e.g. a reference map's timing in free validation.
+        timing = sorted((float(offset), float(beat)) for offset, beat in settings["timing"])
+        first, beat = timing[0]
+        timing[0] = (first - np.ceil(max(0, first) / beat) * beat, beat)
+        return timing, "reference"
     if settings["bpm"]:
         beat = 60000 / settings["bpm"]
         offset = settings["offset"] - np.ceil(max(0, settings["offset"]) / beat) * beat

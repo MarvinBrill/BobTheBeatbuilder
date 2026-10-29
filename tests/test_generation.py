@@ -91,3 +91,48 @@ def test_frame_quantization_does_not_accumulate_beat_drift():
     anchor, beat = fit_beat_segment(quantized, np.median(np.diff(quantized)))
     assert abs(anchor + beat * (len(times) - 1) - times[-1]) < 2
     assert beat == pytest.approx(500, abs=0.02)
+
+
+def test_styled_generation_places_patterns_on_the_beat_grid(monkeypatch):
+    import torch
+    from app.ml import style
+    from app.ml.architecture import ModelConfig
+    from app.ml.phrase_model import PhraseMapper
+    from app.ml.sequence_generation import generate_objects_v2
+
+    class Quiet:
+        def check(self):
+            pass
+
+        def report(self, *args, **kwargs):
+            pass
+
+    torch.manual_seed(3)
+    model = PhraseMapper(
+        ModelConfig(
+            width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=1,
+            style_version=2, mapper_slots=2,
+        )  # fmt: skip
+    ).eval()
+    mel = np.full((1400, 64), -0.2, np.float32)
+    mel[600:700] = -1
+    values, mask = style.vector({"ar": 9, "cs": 4, "od": 8, "hp": 5, "tempo": 120, "stars": 5})
+    condition = torch.from_numpy(style.condition_input(values, mask))[None]
+    settings = {
+        **SETTINGS, "bpm": 120, "offset": 0, "divisor": 4, "seed": 4, "temperature": 0.8,
+        "candidates": 4, "slider_bias": 0.5, "max_stream": 5,
+    }  # fmt: skip
+    objects, timing, report = generate_objects_v2(
+        model, mel, "unused", settings, condition, torch.device("cpu"), Quiet(),
+        mapper=torch.tensor([1.0]),
+    )  # fmt: skip
+    assert objects and report["rhythm"] == "learned-sequence" and timing[0][1] == 500
+    run = 0
+    for index, obj in enumerate(objects):
+        assert (obj.time - timing[0][0]) / 125 == pytest.approx(round((obj.time - timing[0][0]) / 125), abs=1e-6)
+        assert not 600 <= round(obj.time / FRAME_MS) < 700
+        if index + 1 < len(objects):
+            gap = objects[index + 1].time - obj.time
+            assert obj.time + obj.duration + 35 <= objects[index + 1].time + 1e-6
+            run = run + 1 if gap <= 130 else 0
+            assert run + 1 <= 5

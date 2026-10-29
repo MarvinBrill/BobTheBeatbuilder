@@ -8,15 +8,18 @@ import torch
 from safetensors.torch import load_file
 from .. import store
 from ..config import DATA
+from dataclasses import replace
 from .network import device
 from .sequence_data import prepare
+from . import style
+from .. import difficulty
 from .sequence_batches import batches, tasks_for, ExampleWorkers
 from .phrase_model import PhraseMapper
 from .phrase_losses import parts, objective, LossMeter
 from .phrase_metrics import ValidationMetrics
 from .training_setup import configuration, split_maps, metadata_for, dataset_signature, publish
 from .architecture import ModelConfig
-from .checkpoints import save_weights, save_training, restore
+from .checkpoints import save_weights, save_training, restore, warm_start
 from .rollout_evaluation import evaluate_suite
 from .training_control import TrainingControl, context_probability
 from .quality_tracking import grouped_losses, update_quality_bests, training_summary
@@ -51,6 +54,8 @@ def train(settings, context):
         "weight_decay": 0.01,
         "patience": 12,
         "resume_model_id": None,
+        "init_model_id": None,
+        "mapper_min_maps": 10,
         "precision": "auto",
         "cuda_graphs": True,
         "context_robustness": False,
@@ -60,24 +65,72 @@ def train(settings, context):
     source = (
         store.get("model", settings["resume_model_id"]) if settings["resume_model_id"] else None
     )
+    if source and ModelConfig.from_dict(source["model_config"]).style_version < 2:
+        raise ValueError(
+            "Dieses Modell stammt aus der Zeit vor Sterne-, Stil- und Mapper-Steuerung und kann "
+            "nicht fortgesetzt werden. Wähle es stattdessen als Startpunkt (Gewichte übernehmen)."
+        )
+    base = (
+        store.get("model", settings["init_model_id"])
+        if settings["init_model_id"] and not source
+        else None
+    )
     if source:
         settings["seed"] = source["settings"]["seed"]
     torch.manual_seed(settings["seed"])
     rng = np.random.default_rng(settings["seed"])
-    issues = []
-    prepared = prepare(store.get("dataset", settings["dataset_id"])["maps"], context, issues)
+    issues, star_warning = [], None
+    if difficulty.available():
+        try:
+            records, _ = difficulty.annotate_dataset(settings["dataset_id"], context)
+        except ValueError as error:
+            records = store.get("dataset", settings["dataset_id"])["maps"]
+            star_warning = f"Sterne konnten nicht berechnet werden: {error}"
+    else:
+        records = store.get("dataset", settings["dataset_id"])["maps"]
+        star_warning = (
+            "Sterne-Rechner fehlt (scripts/setup.ps1 erneut ausführen): Das Modell lernt ohne "
+            "Star Rating und kann später keine Ziel-Sterne ansteuern."
+        )
+    prepared = prepare(records, context, issues)
+    known = style.known_mappers(records)
+    for item in prepared:
+        item["mapper_name"] = style.resolve_mapper(
+            item.get("creator"), item.get("mapper_candidate"), known
+        )
     split = split_maps(prepared, settings["seed"])
     training, validation, test = split
     if not training:
         raise ValueError("No training songs remain after splitting")
     if source and source.get("dataset_signature") != dataset_signature(prepared):
         raise ValueError("Dataset differs from the saved training run; start a new model")
-    cfg = (
-        ModelConfig.from_dict(source["model_config"])
-        if source
-        else configuration(settings["model_size"])
-    )
+    if source:
+        vocabulary = list(source.get("mapper_vocab", []))
+    else:
+        vocabulary = list(base.get("mapper_vocab", [])) if base else []
+        vocabulary += [
+            name
+            for name in style.mapper_vocabulary(
+                [item["mapper_name"] for item in training], settings["mapper_min_maps"]
+            )
+            if name not in vocabulary
+        ][: 4095 - len(vocabulary)]
+    slots = {name: index + 1 for index, name in enumerate(vocabulary)}
+    for item in prepared:
+        item["mapper"] = slots.get(item["mapper_name"], 0)
+    if source:
+        cfg = ModelConfig.from_dict(source["model_config"])
+    elif base:
+        # Keep the base model's dimensions so its audio and decoder weights can be reused.
+        cfg = replace(
+            ModelConfig.from_dict(base["model_config"]),
+            style_version=2,
+            mapper_slots=len(vocabulary) + 1,
+        )
+    else:
+        cfg = replace(configuration(settings["model_size"]), mapper_slots=len(vocabulary) + 1)
     model = PhraseMapper(cfg).to(selected_device)
+    transferred = warm_start(model, base["id"]) if base else None
     runtime = TrainingRuntime(selected_device, settings["precision"])
     optimizer = runtime.optimizer(model, settings["learning_rate"], settings["weight_decay"])
     start_epoch, step, state = 0, 0, {}
@@ -91,6 +144,32 @@ def train(settings, context):
     directory = DATA / "models" / identifier
     directory.mkdir()
     metadata = metadata_for(identifier, settings, cfg, prepared, split, issues)
+    metadata.update(
+        style_version=cfg.style_version,
+        style_features=list(style.KEYS),
+        mapper_vocab=vocabulary,
+        mapper_profiles=style.mapper_profiles(prepared, vocabulary),
+        star_profiles=style.star_profiles(training + validation),
+        rated_maps=int(
+            sum(
+                item["style_mask"][style.INDEX["stars"]] > 0
+                for item in prepared
+                if "style_mask" in item
+            )
+        ),
+        difficulty_calculator=next(
+            (
+                record["difficulty_attributes"].get("calculator")
+                for record in records
+                if record.get("difficulty_attributes")
+            ),
+            None,
+        ),
+    )
+    if star_warning:
+        metadata["warnings"].append(star_warning)
+    if transferred:
+        metadata["warm_start"] = {"model_id": base["id"], "name": base.get("name"), **transferred}
     # Keep interrupted/cancelled training history attributable after checkpoint recovery.
     metadata["job_id"] = getattr(context, "id", None)
     metadata["execution"] = {

@@ -54,8 +54,9 @@ def test_preparation_reuses_verified_targets_and_shared_audio(tmp_path, monkeypa
     )
     warm = sequence_data.prepare(maps, Context())
     for left, right in zip(first, warm):
-        for key in ("mel", "events", "labels", "condition", "summary"):
+        for key in ("mel", "events", "labels", "condition", "summary", "style", "style_mask"):
             np.testing.assert_array_equal(left[key], right[key])
+        assert left["timing"] == right["timing"] and left["creator"] == right["creator"]
         assert left["song"] == right["song"]
     # Valid-shaped but corrupted data must not become training targets.
     key = hashlib.sha256((first[0]["map_hash"] + first[0]["audio_hash"]).encode()).hexdigest()
@@ -148,3 +149,31 @@ def test_parallel_preparation_honors_cancellation(monkeypatch):
     records = [dict(id=str(i), audio_hash=str(i), title=str(i), artist="test") for i in range(3)]
     with pytest.raises(Cancelled):
         prepare_parallel(records, Cancel(), [], operation)
+
+
+def test_calculated_stars_invalidate_cached_style(tmp_path, monkeypatch):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"other audio fixture")
+    path = tmp_path / "rated.osu"
+    write(
+        path,
+        [HitObject(100, 100, 500), HitObject(200, 100, 1000), HitObject(300, 100, 1250)],
+        dict(title="rated", artist="test", version="NiNo's Insane", ar=8, cs=4, od=6, hp=5),
+        "audio.wav",
+        120,
+        0,
+    )
+    record = dict(
+        id="rated", audio_path=str(audio), map_path=str(path), audio_hash=library.digest(audio),
+        title="rated", artist="test",
+    )  # fmt: skip
+    monkeypatch.setattr(sequence_data, "features", lambda *args: np.zeros((300, 64), np.float32))
+    from app.ml import style
+
+    unrated = sequence_data.prepare([record], Context())[0]
+    assert unrated["style_mask"][style.INDEX["stars"]] == 0
+    assert unrated["mapper_candidate"] == "NiNo" and unrated["creator"] == "BobTheBeatbuilder"
+    attributes = {"star_rating": 4.2, "aim_difficulty": 2.0, "speed_difficulty": 1.0, "calculator": "x"}
+    rated = sequence_data.prepare([{**record, "difficulty_attributes": attributes}], Context())[0]
+    assert style.decode("stars", rated["style"][style.INDEX["stars"]]) == pytest.approx(4.2)
+    assert rated["events"].shape[1] == 49

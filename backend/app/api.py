@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from . import library, store
+from . import difficulty, library, store
 from .config import AUDIO_EXTENSIONS, BACKEND, DATA, MAX_UPLOAD, READER
 from .jobs import Jobs
 from .schemas import GenerateRequest, ScanRequest, Selection, TrainRequest
@@ -65,6 +65,7 @@ def state():
         "map_count": store.count("map"),
         "device": BACKEND,
         "reader_ready": READER.is_file(),
+        "difficulty_ready": difficulty.available(),
         "default_path": os.getenv("BOB_OSU_PATH", "/osu" if os.name != "nt" else "D:/osu! lazer"),
     }
 
@@ -133,6 +134,17 @@ def map_ids(
     if len(items) > 50000:
         raise ValueError("Bitte den Filter auf höchstens 50.000 Maps eingrenzen.")
     return {"ids": [item["id"] for item in items], "total": len(items)}
+
+
+@router.post("/maps/stars")
+def calculate_stars(force: bool = False):
+    if not difficulty.available():
+        raise HTTPException(
+            409, "Der Sterne-Rechner fehlt. Führe scripts/setup.ps1 erneut aus, damit er gebaut wird."
+        )
+    return jobs.submit(
+        "stars", "Sterne berechnen", lambda ctx: difficulty.annotate_library(ctx, force)
+    )
 
 
 @router.post("/scan")
@@ -234,6 +246,8 @@ def train(request: TrainRequest):
             )
         if request.resume_model_id:
             store.get("model", request.resume_model_id)
+        if request.init_model_id:
+            store.get("model", request.init_model_id)
         return jobs.submit("training", request.name, lambda ctx: operation(request.dict(), ctx))
 
 

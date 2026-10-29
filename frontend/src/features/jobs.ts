@@ -19,6 +19,7 @@ const generic: Record<string, string> = {
   import: "Beatmap-Import",
   export: "Export",
   "model-import": "Modell-Import",
+  stars: "Sterne berechnen",
 };
 export function jobTitle(job: Job) {
   return generic[job.kind] || job.name;

@@ -8,9 +8,10 @@ from .sequence_data import pack_events, frame_labels, summary_features
 from .sequence_batches import make_example
 from .training_runtime import TrainingRuntime
 from .cuda_graph import CudaTrainingGraph
+from .style import FEATURE_COUNT
 
 
-def probe_batch():
+def probe_batch(styled=False):
     mel = np.zeros((1024, 64), np.float32)
     objects = [
         HitObject(
@@ -34,15 +35,24 @@ def probe_batch():
         "labels": frame_labels(beatmap, len(mel)),
         "condition": np.full(8, 0.5, np.float32),
     }
+    if styled:
+        item.update(
+            style=np.full(FEATURE_COUNT, 0.4, np.float32),
+            style_mask=np.ones(FEATURE_COUNT, np.float32),
+            mapper=1,
+        )
     values = make_example(item, 0, np.arange(len(events)), 1)
     return {key: torch.from_numpy(value[None].copy()) for key, value in values.items()}
 
 
 def check_compute(selected):
     model = PhraseMapper(
-        ModelConfig(width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=1)
+        ModelConfig(
+            width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=1,
+            style_version=2, mapper_slots=2,
+        )  # fmt: skip
     ).to(selected)
-    batch = {key: value.to(selected) for key, value in probe_batch().items()}
+    batch = {key: value.to(selected) for key, value in probe_batch(styled=True).items()}
     runtime = TrainingRuntime(selected)
     optimizer = runtime.optimizer(model, 0.0003, 0.01)
     if runtime.cuda:

@@ -178,13 +178,20 @@ def test_training_resume_preserves_controller_and_separates_rollout_splits(monke
     from app.config import DATA
     from app.ml import training
     from app.ml.training_setup import split_maps
+    from dataclasses import replace
     from safetensors import safe_open
     from test_phrase_data import example_item
+    from app.ml import style
 
     torch.set_num_threads(2)
+    values, mask = style.vector({"ar": 8, "cs": 4, "od": 6, "hp": 5, "tempo": 120, "stars": 3})
     prepared = [
         dict(
             **example_item(12),
+            style=values,
+            style_mask=mask,
+            creator="Tester",
+            mapper_candidate=None,
             song=str(i),
             map_id=str(i),
             map_hash=str(i),
@@ -196,8 +203,12 @@ def test_training_resume_preserves_controller_and_separates_rollout_splits(monke
     train, validation, test = split_maps(prepared, 42)
     calls = []
     monkeypatch.setattr(training, "prepare", lambda *args: prepared)
-    monkeypatch.setattr(training, "configuration", lambda _: small_model().config)
-    monkeypatch.setattr(training, "evaluate", lambda *args: (1.0, {"loss_terms": {"onset": 1.0}}))
+    monkeypatch.setattr(
+        training, "configuration", lambda _: replace(small_model().config, style_version=2)
+    )
+    monkeypatch.setattr(
+        training, "evaluate", lambda *args, **kwargs: (1.0, {"loss_terms": {"onset": 1.0}})
+    )
 
     def suite(model, maps, *args, **kwargs):
         calls.append({item["song"] for item in maps})
@@ -249,3 +260,17 @@ def test_training_resume_preserves_controller_and_separates_rollout_splits(monke
     assert (DATA / "models" / first["id"] / "model.safetensors").read_bytes() == (
         DATA / "models" / second["id"] / "model.safetensors"
     ).read_bytes()
+
+
+def test_legacy_models_cannot_be_resumed_but_rhythm_groups_are_reported():
+    from app import store
+    from app.ml import training
+
+    store.save(
+        "model",
+        dict(id="legacy-resume", model_config=small_model().config.dictionary(), settings={"seed": 1}),
+    )
+    with pytest.raises(ValueError, match="Startpunkt"):
+        training.train(dict(dataset_id="none", device="cpu", resume_model_id="legacy-resume"), None)
+    assert grouped_losses({"onset": 1, "gap": 0.5})["pattern"] == 0.5
+    assert "pattern" not in grouped_losses({"onset": 1})
