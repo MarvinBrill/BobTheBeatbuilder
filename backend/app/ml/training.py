@@ -10,7 +10,7 @@ from .. import store
 from ..config import DATA
 from .network import device
 from .sequence_data import prepare
-from .sequence_batches import batches, tasks_for
+from .sequence_batches import batches, tasks_for, ExampleWorkers
 from .phrase_model import PhraseMapper
 from .phrase_losses import parts, objective, LossMeter
 from .phrase_metrics import ValidationMetrics
@@ -29,11 +29,11 @@ def tensors(batch, selected_device):
     return {key: torch.from_numpy(value).to(selected_device) for key, value in batch.items()}
 
 
-def evaluate(model, maps, batch_size, selected_device, context, weight, runtime=None):
+def evaluate(model, maps, batch_size, selected_device, context, weight, runtime=None, workers=None):
     runtime = runtime or TrainingRuntime(selected_device, "float32")
     meter, quality = LossMeter(), ValidationMetrics()
     model.eval()
-    source = batches(maps, batch_size, np.random.default_rng(0), False)
+    source = batches(maps, batch_size, np.random.default_rng(0), False, workers=workers)
     with torch.no_grad(), device_batches(source, selected_device) as loaded:
         for batch in loaded:
             context.check()
@@ -125,6 +125,9 @@ def train(settings, context):
     if source and not state.get("training_control") and metrics:
         control.lr = min(control.lr, metrics[-1].get("learning_rate", control.lr))
     local_updates, completed_epochs, published, evaluating_best = 0, start_epoch, False, False
+    # Batches are built in worker processes so the GPU is not left waiting on NumPy.
+    example_workers = ExampleWorkers()
+    metadata["execution"]["batch_workers"] = example_workers.workers
 
     def checkpoint():
         save_training(
@@ -159,7 +162,9 @@ def train(settings, context):
             start = runtime.begin_measurement()
             examples, epoch_updates, last_report = 0, step, 0.0
             finite_loss = torch.ones((), dtype=torch.bool, device=selected_device)
-            source_batches = batches(training, settings["batch_size"], rng, True, tasks)
+            source_batches = batches(
+                training, settings["batch_size"], rng, True, tasks, workers=example_workers
+            )
             with device_batches(source_batches, selected_device) as loaded:
                 for batch_index, batch in enumerate(loaded):
                     context.check()
@@ -215,7 +220,13 @@ def train(settings, context):
                         )
             performance = runtime.measurement(start, examples, step - epoch_updates)
             validation_loss, quality = evaluate(
-                model, validation, settings["batch_size"], selected_device, context, weight
+                model,
+                validation,
+                settings["batch_size"],
+                selected_device,
+                context,
+                weight,
+                workers=example_workers,
             )
             train_terms = meter.values()
             # Auxiliary context loss is reported separately; retain comparable base curves.
@@ -277,7 +288,13 @@ def train(settings, context):
         model.load_state_dict(load_file(str(directory / "model.safetensors")))
         if test:
             loss, quality = evaluate(
-                model, test, settings["batch_size"], selected_device, context, weight
+                model,
+                test,
+                settings["batch_size"],
+                selected_device,
+                context,
+                weight,
+                workers=example_workers,
             )
             metadata["heldout_test"] = {"loss": loss, **quality}
         if test or validation:
@@ -342,5 +359,6 @@ def train(settings, context):
                     published = True
         raise error
     finally:
+        example_workers.close()
         if not published:
             shutil.rmtree(directory)

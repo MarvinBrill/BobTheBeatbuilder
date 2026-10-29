@@ -226,6 +226,12 @@ def train(request: TrainRequest):
 
     with jobs.lock:
         store.get("dataset", request.dataset_id)
+        # Jobs run one at a time; a second training would only wait behind the first.
+        if any(store.get("job", identifier).get("kind") == "training" for identifier in list(jobs.events)):
+            raise HTTPException(
+                409,
+                "Es läuft bereits ein Training oder es wartet eines. Breche es zuerst ab (Aktivität).",
+            )
         if request.resume_model_id:
             store.get("model", request.resume_model_id)
         return jobs.submit("training", request.name, lambda ctx: operation(request.dict(), ctx))

@@ -243,4 +243,4 @@ def prepare_serial(records, context, issues=None):
 def prepare(records, context, issues=None):
     from .preparation_workers import prepare_parallel
 
-    return prepare_parallel(records, context, issues, prepare_serial)
+    return prepare_parallel(records, context, issues, prepare_serial, processes=True)
