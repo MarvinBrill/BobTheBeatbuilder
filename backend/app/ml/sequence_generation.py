@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from copy import deepcopy
+from dataclasses import replace
 from scipy.signal import find_peaks
 from .architecture import EVENT_CONTEXT, CENTRAL_FRAMES
 from .audio import FRAME_MS
@@ -14,6 +15,8 @@ from .joint_planning import skip_option
 from .continuation_search import choose_continuation
 from .motif_memory import MotifMemory, analysis_spans, link_spans
 from .style import GAP_BEATS, REST, STREAM_GAP, allowed_gaps
+from .rhythm_guidance import build_guide, loudness_profile
+from .spinners import drop_spinners, fill_spinners
 from ..timing import red_points
 
 
@@ -296,6 +299,29 @@ def silence_after(active, time):
     return (frame + quiet[0]) * FRAME_MS if len(quiet) else len(active) * FRAME_MS
 
 
+def spinner_lead(span, beat):
+    """The lead time stored with a planned spinner (older 3-tuples: half a beat)."""
+    return span[3] if len(span) > 3 else max(0.5 * beat, 150.0)
+
+
+def placed_spinners(objects, reserved, active, timing, end, settings, truncated=False):
+    """Reserved spans that stayed free of objects, plus long audible gaps and the outro."""
+    spinners = []
+    for span in reserved:
+        left, right = span[0], span[1]
+        lead = spinner_lead(span, grid_point(timing, left).beat_length)
+        if not objects or objects[-1].time < right:
+            continue  # the rhythm never resumed after it: the map ended before the drop
+        if all(
+            obj.time + obj.duration <= left - lead + 1e-6 or obj.time >= right + 1e-6
+            for obj in objects
+        ):
+            spinners.append((left, right))
+    if not truncated:
+        spinners += fill_spinners(objects, active, timing, end, settings, spinners)
+    return sorted(spinners)
+
+
 def decoder_input_v2(objects, times, beats, index, duration, selected_device, timing):
     beginning = max(0, index - EVENT_CONTEXT + 1)
     indices = list(range(beginning, index + 1))
@@ -320,8 +346,15 @@ def decoder_input_v2(objects, times, beats, index, duration, selected_device, ti
     )
 
 
-def choose_next_time(logits, obj, timing, onset, active, end, settings, run, rng):
-    """Combine the learned rhythm distribution with audible onsets on the beat grid."""
+def choose_next_time(
+    logits, obj, timing, onset, active, end, settings, run, rng, guide=None, spinner=None
+):
+    """Combine the learned rhythm distribution with audible onsets on the beat grid.
+
+    `guide` (a RhythmGuide) adds soft costs for gaps far denser than the song's local
+    density envelope. `spinner` is the next reserved (start, end, resume_at) span: no head
+    may start inside it or too close before it, and the rhythm resumes at `resume_at`.
+    """
     divisor = int(settings.get("divisor", 4))
     allowed = allowed_gaps(divisor)
     beat = obj.beat_length
@@ -331,28 +364,64 @@ def choose_next_time(logits, obj, timing, onset, active, end, settings, run, rng
     weight = float(settings.get("onset_weight", 0.7))
     bias = float(settings.get("tempo_bias", 0.0))
     longest = int(settings.get("max_stream") or 0)
+    blocked_from = blocked_until = None
+    if spinner is not None:
+        blocked_from = spinner[0] - spinner_lead(spinner, beat)
+        blocked_until = spinner[2]
+
+    def free(time):
+        return blocked_from is None or not blocked_from < time < blocked_until
+
+    def cost(time, short=False):
+        return guide.cost(obj.time, time, run, short) if guide is not None else 0.0
+
     options = []
     for index, gap in enumerate(GAP_BEATS):
         if not allowed[index]:
             continue
+        short = gap <= STREAM_GAP
         # `run` counts consecutive short gaps; a run of n gaps spans n + 1 objects.
-        if gap <= STREAM_GAP and longest and run + 2 > longest:
+        if short and longest and run + 2 > longest:
             continue
         time = snap_to_grid(obj.time + gap * beat, timing, divisor)
-        if time < release - 1e-6 or time > end or not audible(active, time):
+        if time < release - 1e-6 or time > end or not audible(active, time) or not free(time):
             continue
         evidence = onset_evidence(onset, time)
         options.append(
-            (log_probs[index] + weight * np.log(evidence + 1e-3) - bias * np.log2(gap), time, index)
+            (
+                log_probs[index]
+                + weight * np.log(evidence + 1e-3)
+                - bias * np.log2(gap)
+                - cost(time, short),
+                time,
+                index,
+            )
         )
-    pause = next_onset(onset, active, max(release, obj.time + 8.5 * beat), end, timing, divisor)
-    if pause is not None:
-        options.append(
-            (log_probs[REST] + weight * np.log(onset_evidence(onset, pause) + 1e-3), pause, REST)
+    near = blocked_from is not None and release < blocked_until
+    near = near and blocked_from - obj.time <= 8.5 * beat
+    if near:
+        # The spinner follows: the next head is the first onset after its recovery time.
+        resume = next_onset(
+            onset, active, max(release, blocked_until), end, timing, divisor, anywhere=True
         )
+        if resume is not None:
+            options.append((log_probs[REST] - cost(resume), resume, REST))
+    else:
+        pause = next_onset(onset, active, max(release, obj.time + 8.5 * beat), end, timing, divisor)
+        if pause is not None and free(pause):
+            options.append(
+                (
+                    log_probs[REST] + weight * np.log(onset_evidence(onset, pause) + 1e-3)
+                    - cost(pause),
+                    pause,
+                    REST,
+                )
+            )
     if not options:
         # Silence or a break ahead: continue with the next audible onset, if there is one.
         resume = next_onset(onset, active, release, end, timing, divisor, anywhere=True)
+        if resume is not None and not free(resume):
+            resume = next_onset(onset, active, blocked_until, end, timing, divisor, anywhere=True)
         return (resume, REST) if resume is not None else None
     scores = np.array([option[0] for option in options], np.float64)
     temperature = max(0.05, float(settings.get("rhythm_temperature", 0.6)))
@@ -381,6 +450,14 @@ def generate_objects_v2(
     summary = summary_features(mel)
     prediction = predict_rhythm(model, mel, summary, condition, selected_device, context, mapper)
     timing, timing_source = timing_map(prediction, audio_path, settings)
+    # Training only ever saw beat confidence 1, 0.75 (slightly disturbed timing) or no timing;
+    # the audio fallback's 0.35 put every musical-time query out of distribution.
+    timing = [
+        replace(point, beat_confidence=max(point.beat_confidence, 0.75))
+        if not point.inherited and 0 < point.beat_confidence < 0.75
+        else point
+        for point in timing
+    ]
     if motif_memory is None and settings.get("motifs", False):
         motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
     active = np.max(mel, axis=1) > -0.7
@@ -401,9 +478,24 @@ def generate_objects_v2(
     times = [first] if first is not None else []
     beats = [grid_point(timing, first).beat_length] if first is not None else []
     run, central_cache, generated_plan, truncated = 0, None, None, False
+    guide = build_guide(prediction, mel, settings)
+    loudness = loudness_profile(mel)
+    spans = []
+    if first is not None:
+        spans = [
+            span
+            for span in drop_spinners(loudness, active, timing, start, end, settings)
+            if span[0] - span[3] > first
+        ]
+    reserved = list(spans)
+    if trace is not None and spans:
+        trace.record("spinner_plan", spans=[list(span) for span in spans], source="loudness_jump")
     with torch.no_grad():
         while times:
             index, time = len(objects), times[-1]
+            while spans and spans[0][2] <= time - 1e-6:
+                spans.pop(0)  # passed; `reserved` keeps every planned span
+            upcoming = spans[0] if spans else None
             context.report(
                 0.35 + 0.55 * min(1.0, (time - start) / max(1.0, end - start)),
                 f"Rhythmus und Bewegung erzeugen · {index + 1} Objekte",
@@ -425,6 +517,9 @@ def generate_objects_v2(
             beat = beats[-1]
             # Sliders may not run into silence, the end of the audio or past eight beats.
             horizon = min(time + 8 * beat, silence_after(active, time), end + 100) + 35
+            if upcoming is not None and time < upcoming[0]:
+                # ...nor into a reserved spinner (keeping the lead time before it).
+                horizon = max(time + 36, min(horizon, upcoming[0] - spinner_lead(upcoming, beat) + 35))
             chosen = rank_candidates(
                 model,
                 output,
@@ -462,7 +557,11 @@ def generate_objects_v2(
             )
             if not np.isfinite(logits).all():
                 raise ValueError("Model generated non-finite rhythm predictions")
-            choice = choose_next_time(logits, obj, timing, onset, active, end, settings, run, rng)
+            if guide is not None:
+                guide.history.append(obj.time)
+            choice = choose_next_time(
+                logits, obj, timing, onset, active, end, settings, run, rng, guide, upcoming
+            )
             if choice is None:
                 break
             if max_objects is not None and len(objects) >= max_objects:
@@ -475,6 +574,7 @@ def generate_objects_v2(
             times.append(following)
             beats.append(grid_point(timing, following).beat_length)
             classes.append(gap)
+    spinners = placed_spinners(objects, reserved, active, timing, end, settings, truncated)
     report = quality_report(objects, settings)
     report.update(
         timing_source=timing_source,
@@ -485,6 +585,8 @@ def generate_objects_v2(
         heavily_repaired_fraction=float(np.mean(np.asarray(repairs) > 0.1)) if repairs else 0.0,
         evaluation_start_ms=float(start),
         evaluation_end_ms=float(stop),
+        spinners=[[float(left), float(right)] for left, right in spinners],
+        density_guidance=guide is not None,
         selected_count_before_limit=len(objects) + int(truncated),
         truncated=truncated,
         skipped_interior_heads=0,

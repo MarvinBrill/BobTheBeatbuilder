@@ -155,7 +155,8 @@ def clean(value):
     return "".join(char if char.isprintable() else " " for char in str(value))[:180]
 
 
-def write(path, objects, settings, audio_name, bpm, offset, timing=None):
+def write(path, objects, settings, audio_name, bpm, offset, timing=None, spinners=()):
+    """Write circles, sliders and optional spinners, given as (start, end) in ms."""
     beat = 60000 / bpm
     # Keep the same grid phase while establishing timing before the first object.
     first = min((obj.time for obj in objects), default=0)
@@ -201,9 +202,21 @@ def write(path, objects, settings, audio_name, bpm, offset, timing=None):
         "",
         "[HitObjects]",
     ]
+    spinner_lines = [
+        (round(start), f"256,192,{round(start)},{8 | 4},0,{round(end)},0:0:0:0:")
+        for start, end in sorted(spinners)
+        if round(end) > round(start)
+    ]
+    after_spinner = {
+        next((index for index, obj in enumerate(objects) if obj.time > start), None)
+        for start, _ in spinner_lines
+    }
     for index, obj in enumerate(objects):
+        while spinner_lines and spinner_lines[0][0] < round(obj.time):
+            lines.append(spinner_lines.pop(0)[1])
         x, y, time = round(obj.x), round(obj.y), round(obj.time)
-        combo = 4 if obj.new_combo or index == 0 else 0
+        # The object after a spinner always starts a new combo in osu!.
+        combo = 4 if obj.new_combo or index == 0 or index in after_spinner else 0
         if obj.slider and obj.duration > 0:
             if obj.curve:
                 controls = "|".join(f"{round(x)}:{round(y)}" for x, y in obj.curve[1:])
@@ -218,6 +231,7 @@ def write(path, objects, settings, audio_name, bpm, offset, timing=None):
             )
         else:
             lines.append(f"{x},{y},{time},{1 | combo},0,0:0:0:0:")
+    lines.extend(line for _, line in spinner_lines)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

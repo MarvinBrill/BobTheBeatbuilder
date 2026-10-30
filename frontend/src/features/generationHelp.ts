@@ -14,6 +14,10 @@ export const generationHelp = {
     "Wie frei das Modell zwischen passenden Rhythmen wählt (1/2-Sprünge, Triples, Streams, Pausen). Niedrig bleibt beim wahrscheinlichsten Rhythmus, höher wechselt öfter. Die Musik-Onsets fließen immer mit ein.",
   rhythmMode:
     "Patterns setzt Triples, Bursts und Streams als zusammenhängende Folgen auf das Beat-Raster. Onsets wählt zuerst alle Zeitpunkte aus den erkannten Musik-Onsets und plant danach Objekte, Slider und Vorausschau.",
+  densityGuidance:
+    "Wie stark der Rhythmus der vom Modell gelernten lokalen Notendichte folgt. Verhindert, dass ein einmal begonnener Stream bis zum Songende weiterläuft, und lässt in ruhigen Abschnitten Pausen zu. 0 = aus (altes Verhalten).",
+  dynamics:
+    "Wie stark leise Stellen ruhiger gemappt werden. Bei 1 halbiert sich die Zieldichte pro 6 dB, die ein Abschnitt leiser ist als die lauten Teile des Songs. 0 = Lautstärke ignorieren.",
   temperature:
     "Vielfalt der Positions- und Kurvenkandidaten. Niedrig bleibt näher an den wahrscheinlichsten Modellvorschlägen; höher erlaubt stärkere Varianten. Ändert nicht direkt die Objektdichte oder die Treffergenauigkeit. Mehr Vielfalt bedeutet nicht automatisch bessere Maps.",
 };

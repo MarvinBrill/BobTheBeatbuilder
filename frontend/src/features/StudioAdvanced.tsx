@@ -13,6 +13,11 @@ export const defaultAdvanced = {
   candidates: 12,
   max_stream: 0,
   rhythm_temperature: 0.6,
+  density_guidance: 1,
+  dynamics: 1,
+  spinners: true,
+  style_from_stars: true,
+  combos: true,
   rhythm_mode: "patterns" as "patterns" | "onsets",
 };
 
@@ -141,6 +146,56 @@ export function StudioAdvanced({
             />
           </div>
         )}
+        {styled && value.rhythm_mode === "patterns" && (
+          <div className="field-row">
+            <Slider
+              label="Dichte-Verlauf folgen"
+              help={generationHelp.densityGuidance}
+              value={value.density_guidance}
+              min={0}
+              max={3}
+              step={0.25}
+              onChange={(density_guidance) => update({ density_guidance })}
+            />
+            <Slider
+              label="Dynamik (leise = ruhiger)"
+              help={generationHelp.dynamics}
+              value={value.dynamics}
+              min={0}
+              max={2}
+              step={0.25}
+              onChange={(dynamics) => update({ dynamics })}
+            />
+          </div>
+        )}
+        {styled && value.rhythm_mode === "patterns" && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={value.spinners}
+              onChange={(event) => update({ spinners: event.target.checked })}
+            />{" "}
+            Spinner vor Drops, in langen hörbaren Lücken und im Outro
+          </label>
+        )}
+        {styled && (
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={value.style_from_stars}
+              onChange={(event) => update({ style_from_stars: event.target.checked })}
+            />{" "}
+            Offene Pattern-Werte mit dem typischen Stil der Ziel-Sterne füllen
+          </label>
+        )}
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={value.combos}
+            onChange={(event) => update({ combos: event.target.checked })}
+          />{" "}
+          Neue Combos an Takten, nach Pausen und Spinnern setzen
+        </label>
         <Slider
           label="Variantenvielfalt"
           help={generationHelp.temperature}

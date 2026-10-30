@@ -187,7 +187,7 @@ def test_generation_persists_requested_trace_outside_export(monkeypatch):
     import zipfile
     from app.ml import generation
 
-    model = SimpleNamespace(load_state_dict=lambda weights: None, eval=lambda: None)
+    model = SimpleNamespace(load_state_dict=lambda weights: None, eval=lambda: None, styled=False)
     model.to = lambda device: model
     monkeypatch.setattr(generation, "create_model", lambda *args: model)
     monkeypatch.setattr(generation, "load_file", lambda path: {})

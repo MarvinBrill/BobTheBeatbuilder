@@ -90,6 +90,17 @@ class GenerateRequest(BaseModel):
     style: dict[str, float] = Field(default_factory=dict)
     max_stream: int = Field(default=0, ge=0, le=256)
     rhythm_temperature: float = Field(default=0.6, ge=0.05, le=1.5)
+    # Pattern mode: follow the model's local density envelope (0 disables the guidance),
+    # map quiet sections sparser ("dynamics": 6 dB quieter halves the density at 1.0),
+    # softly end streams after this many objects, and place spinners before drops/outros.
+    density_guidance: float = Field(default=1.0, ge=0, le=3)
+    dynamics: float = Field(default=1.0, ge=0, le=2)
+    stream_soft_limit: int = Field(default=16, ge=0, le=256)
+    spinners: bool = True
+    # Style-v2: fill unset pattern groups with the typical style of the target stars, and
+    # set new combos on bar boundaries (the combo head alone almost never starts one).
+    style_from_stars: bool = True
+    combos: bool = True
     calibrate: bool = False
     calibration_rounds: int = Field(default=3, ge=1, le=5)
     # "patterns": the model chooses each next note on the beat grid (style-v2 models).

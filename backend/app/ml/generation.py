@@ -20,6 +20,7 @@ from .sequence_data import summary_features
 from .sequence_generation import generate_objects, generate_objects_v2
 from .architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA
 from .generation_trace import GenerationTrace, object_snapshot
+from .combos import assign_combos
 from . import style
 
 STAR_TOLERANCE = 0.15
@@ -37,6 +38,36 @@ def mapper_index(metadata, name):
     return 0
 
 
+# Style groups filled from the training maps at the target stars when the user left them
+# open. Groups are dropped together in training, so they are filled together here too.
+PROFILE_GROUPS = ("density", "rhythm", "movement", "sliders", "structure")
+
+
+def profile_style(profile, user_style):
+    """Typical values of the star bucket for every group the user did not touch.
+
+    With only stars/AR/CS/OD/HP known the model rarely saw a condition this empty in
+    training; free validation (full reference style) moved 100-150 px, real generation with
+    an empty style collapsed to 5 px stacks. A typical 6-star style keeps it in range.
+    """
+    if not profile:
+        return {}
+    touched = {
+        group for group, indices in style.GROUPS.items()
+        if any(style.KEYS[index] in (user_style or {}) for index in indices)
+    }  # fmt: skip
+    chosen = {}
+    for group in PROFILE_GROUPS:
+        if group in touched:
+            continue
+        for index in style.GROUPS[group]:
+            key = style.KEYS[index]
+            if key in FIXED or profile.get(key) is None:
+                continue
+            chosen[key] = float(profile[key])
+    return chosen
+
+
 def styled_condition(settings, tempo):
     raw = {key: settings[key] for key in ("ar", "cs", "od", "hp")}
     raw["tempo"] = tempo
@@ -44,7 +75,12 @@ def styled_condition(settings, tempo):
         raw["stars"] = settings["condition_stars"]
     if settings.get("aim_share") is not None:
         raw["aim_share"] = settings["aim_share"]
-    for key, value in (settings.get("style") or {}).items():
+    chosen = {
+        **(settings.get("profile_style") or {}),
+        **(settings.get("calibration_style") or {}),
+        **(settings.get("style") or {}),
+    }
+    for key, value in chosen.items():
         if key in style.INDEX and key not in FIXED and value is not None:
             raw[key] = value
     values, mask = style.vector(raw)
@@ -62,13 +98,84 @@ def dominant_tempo(timing, duration_ms):
     return 60000 / beat
 
 
-def verified_write(path, objects, settings, audio_name, timing, trace=None):
+def star_profile(metadata, stars):
+    """Typical style of the training maps closest to `stars` (None when unknown)."""
+    profiles = metadata.get("star_profiles") or {}
+    if stars is None or not profiles:
+        return None
+    bucket = min(profiles, key=lambda key: abs(float(key) - float(stars)))
+    return profiles[bucket].get("style") or None
+
+
+def trained_star_range(metadata):
+    profiles = metadata.get("star_profiles") or {}
+    if not profiles:
+        return 0.5, 12.0
+    values = [float(key) for key in profiles]
+    return max(0.5, min(values) - 0.25), min(12.0, max(values) + 0.25)
+
+
+def calibration_step(settings, target, stars, attributes, profile, star_range):
+    """Next calibration settings from the measured stars and their aim/speed split.
+
+    Raising the condition stars and a uniform `tempo_bias` were the only levers before; both
+    push every gap of the song towards 1/4 when the real deficit is aim (tiny spacing), which
+    produced song-long streams. The stars condition now stays near the trained range and the
+    target, `tempo_bias` only changes when speed is the weaker skill, and an aim deficit asks
+    the model for wider jumps instead.
+    """
+    updated = dict(settings)
+    error = target - stars
+    low, high = star_range
+    lower, upper = max(low, target - 1.5), min(high, target + 1.5)
+    if lower > upper:  # a target outside the trained range: stay at the nearest edge
+        lower = upper = float(np.clip(target, low, high))
+    updated["condition_stars"] = float(
+        np.clip(settings["condition_stars"] + 0.6 * error, lower, upper)
+    )
+    aim = (attributes or {}).get("aim_difficulty") or 0.0
+    speed = (attributes or {}).get("speed_difficulty") or 0.0
+    # The user's own aim/speed balance wins over the typical one of the star bucket.
+    typical_share = settings.get("aim_share") or (profile or {}).get("aim_share") or 0.55
+    share = aim / (aim + speed) if aim + speed > 0 else typical_share
+    user_style = settings.get("style") or {}
+    lever = "jump_spacing" not in user_style and bool(profile and profile.get("jump_spacing"))
+    if error > 0 and share < typical_share - 0.05 and lever:
+        # Aim is missing: wider jumps, never denser rhythm.
+        updated["tempo_bias"] = float(np.clip(min(settings["tempo_bias"], 0.0) - 0.1, -1, 1))
+        current = settings.get("calibration_style", {}).get("jump_spacing", profile["jump_spacing"])
+        updated["calibration_style"] = {
+            **settings.get("calibration_style", {}),
+            "jump_spacing": float(np.clip(current * (1 + 0.15 * min(error, 2)), 40, 400)),
+        }
+    else:
+        updated["tempo_bias"] = float(np.clip(settings["tempo_bias"] + 0.25 * error, -1, 1))
+    return updated
+
+
+def mark_spinner_combos(objects, spinners):
+    """osu! starts a new combo after every spinner; keep the objects consistent with that."""
+    spinners = [tuple(span) for span in spinners]
+    for start, _ in spinners:
+        following = next((obj for obj in objects if obj.time > start), None)
+        if following is not None:
+            following.new_combo = True
+    return spinners
+
+
+def verified_write(path, objects, settings, audio_name, timing, trace=None, spinners=()):
     """Write the map and check that osu! will read back exactly the generated objects."""
     bpm, offset = 60000 / timing[0].beat_length, timing[0].time
-    write(path, objects, settings, audio_name, bpm, offset, timing)
+    write(path, objects, settings, audio_name, bpm, offset, timing, spinners)
     verified = parse(path)
     if len(verified.objects) != len(objects):
         raise ValueError("Generated beatmap validation failed")
+    expected_spinners = [(round(start), round(end)) for start, end in sorted(spinners)]
+    if [(round(start), round(end)) for start, end in verified.ignored] != expected_spinners:
+        raise ValueError("Spinner timing changed during export")
+    for start, end in expected_spinners:
+        if any(start - 1 < obj.time + obj.duration and obj.time < end + 1 for obj in objects):
+            raise ValueError("Generated spinner overlaps an object")
     for index, (actual, expected) in enumerate(zip(verified.objects, objects)):
         if trace is not None:
             trace.record(
@@ -180,7 +287,18 @@ def generate(settings, context, trace=None):
         mapper = torch.tensor([float(settings["mapper_index"])], device=selected_device)
         chosen = settings["style"].get("slider_ratio")
         settings["slider_bias"] = 0 if chosen == 0 or settings.get("slider_bias") == 0 else 0.5
-        settings["condition_stars"] = settings["target_stars"]
+        star_range = trained_star_range(metadata)
+        profile = star_profile(metadata, settings["target_stars"])
+        settings["condition_stars"] = (
+            float(np.clip(settings["target_stars"], *star_range))
+            if settings["target_stars"] is not None
+            else None
+        )
+        if settings.get("style_from_stars", True):
+            settings["profile_style"] = profile_style(profile, settings["style"])
+        if profile and profile.get("tempo") and settings.get("tempo_prior") is None:
+            # Typical tempo of training maps at this difficulty: resolves 99 vs 199 BPM.
+            settings["tempo_prior"] = float(profile["tempo"])
         if not settings.get("bpm") and not settings.get("timing_points"):
             # Tempo is part of the condition; find the timing once with tempo unknown.
             context.report(0.03, "Tempo bestimmen")
@@ -247,8 +365,11 @@ def generate(settings, context, trace=None):
                     context,
                     trace=trace,
                 )
+            if settings.get("combos", True):
+                assign_combos(objects, timing, report.get("spinners") or [], settings)
+            spinners = mark_spinner_combos(objects, report.get("spinners") or [])
             candidate = directory / "candidate.osu"
-            verified_write(candidate, objects, settings, audio_name, timing)
+            verified_write(candidate, objects, settings, audio_name, timing, spinners=spinners)
             attributes = measured_stars(candidate)
             stars = attributes["star_rating"] if attributes else None
             history.append(
@@ -265,26 +386,23 @@ def generate(settings, context, trace=None):
             )
             error = abs(stars - target) if stars is not None and target is not None else 0
             if best is None or error < best[0]:
-                best = (error, objects, timing, report, attributes)
+                best = (error, objects, timing, report, attributes, spinners)
             if stars is None or target is None or error <= STAR_TOLERANCE or attempt + 1 == rounds:
                 break
             context.report(0.9, f"Sterne {stars:.2f} statt {target:.2f} · neuer Durchlauf")
             ratio = target / max(stars, 0.5)
             if styled:
-                settings["condition_stars"] = float(
-                    np.clip(settings["condition_stars"] + 0.9 * (target - stars), 0.5, 12)
-                )
-                settings["tempo_bias"] = float(
-                    np.clip(settings["tempo_bias"] + 0.35 * (target - stars), -2, 2)
+                settings = calibration_step(
+                    settings, target, stars, attributes, profile, star_range
                 )
             else:
                 settings["density"] = float(np.clip(settings["density"] * ratio**0.8, 0.5, 10))
                 settings["spacing"] = float(np.clip(settings["spacing"] * ratio**0.5, 0, 1))
-        _, objects, timing, report, attributes = best
+        _, objects, timing, report, attributes, spinners = best
         candidate.unlink(missing_ok=True)
         export_audio(audio_path, directory / audio_name)
         bpm, offset = verified_write(
-            directory / "map.osu", objects, settings, audio_name, timing, trace
+            directory / "map.osu", objects, settings, audio_name, timing, trace, spinners
         )
         if known_timing:
             report["timing_source"] = known_timing["timing_source"]
@@ -296,6 +414,7 @@ def generate(settings, context, trace=None):
             archive.write(directory / audio_name, audio_name)
         preview = {
             "objects": [asdict(obj) for obj in objects],
+            "spinners": [[float(start), float(end)] for start, end in spinners],
             "duration": len(mel) * FRAME_MS / 1000,
             "bpm": bpm,
             "offset": offset,

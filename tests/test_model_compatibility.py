@@ -123,6 +123,6 @@ def test_model_listing_ignores_missing_architecture_without_hiding_current_model
     monkeypatch.setattr(
         store,
         "all_records",
-        lambda kind: [{"id": "incomplete"}, current] if kind == "model" else [],
+        lambda kind, drop=(): [{"id": "incomplete"}, current] if kind == "model" else [],
     )
     assert [model["id"] for model in api.state()["models"]] == ["current"]

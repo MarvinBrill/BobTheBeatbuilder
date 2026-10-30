@@ -108,6 +108,23 @@ def roundtrip_report(objects, timing, settings):
     )
 
 
+def longest_short_run(objects):
+    """Objects in the longest run of <= 1/4-beat gaps (1 when there is none)."""
+    longest = length = 1
+    for obj, following in zip(objects, objects[1:]):
+        short = following.time - obj.time <= style.STREAM_GAP * obj.beat_length + 1e-6
+        length = length + 1 if short else 1
+        longest = max(longest, length)
+    return longest if objects else 0
+
+
+def covered_ratio(predicted, reference, truncated):
+    """Generated / reference objects over the span the generator actually covered."""
+    if truncated and len(predicted):
+        reference = reference[reference <= predicted[-1]]
+    return len(predicted) / max(1, len(reference))
+
+
 def evaluate_rollout(
     model, item, selected_device, context, max_objects=256, progress=0.97, section=None, seed=42
 ):
@@ -165,6 +182,10 @@ def evaluate_rollout(
         reference_objects=len(reference),
         generated_objects=len(predicted),
         reference_onset_f1=2 * matches / max(1, len(predicted) + len(reference)),
+        # Over- or undermapping against the reference (1 = same count); a stream locked in
+        # for a whole section shows up here and in the longest run, not in the losses.
+        object_ratio=covered_ratio(predicted, reference, diagnostics.get("truncated", False)),
+        longest_short_run=longest_short_run(objects),
         reference_slider_fraction=float(events[:, 9].mean()) if len(events) else 0,
         reference_jump_p95_pixels=(
             float(np.percentile(events[:, 39] * 512, 95)) if len(events) else 0
@@ -224,6 +245,8 @@ def evaluate_suite(model, maps, selected_device, context, progress=0.97, include
         "slider_shape_issues",
         "jump_p95_pixels",
         "aim_speed_p95",
+        "object_ratio",
+        "longest_short_run",
     )
     return {
         "report_schema": REPORT_SCHEMA,

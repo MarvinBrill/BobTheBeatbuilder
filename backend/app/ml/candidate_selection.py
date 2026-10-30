@@ -22,6 +22,25 @@ class Candidate:
     identifier: object
 
 
+def movement_cost(motion, expected):
+    """Deviation of a candidate's movement from the model's expected movement.
+
+    `expected` is a regression output, i.e. a conditional mean. For direction (cosine and
+    sine to the previous movement) an uncertain model predicts about 0, which is exactly
+    the value of a stacked note (distance 0), so plain deviation rewarded stacks and the
+    map collapsed to 0-5 px spacing. Direction now only counts as far as the model is sure
+    of it, and the spacing itself is compared on a log scale, where the old /512 units made
+    a 150 px jump versus a stack nearly free.
+    """
+    motion, expected = np.asarray(motion, np.float64), np.asarray(expected, np.float64)
+    deviation = np.minimum(np.abs(motion - expected), 5)
+    certainty = float(np.clip(np.hypot(expected[2], expected[3]), 0, 1))
+    weights = np.array([1, 1, certainty, certainty, 1, 1, 1, 1], np.float64)
+    distance, wanted = max(0.0, motion[0] * 512), max(0.0, expected[0] * 512)
+    spacing = abs(math.log((distance + 16) / (wanted + 16)))
+    return float((deviation * weights).sum() / len(weights) + 0.5 * spacing)
+
+
 def probabilities(logits, temperature=1):
     scores = np.asarray(logits, dtype=np.float64) / temperature
     scores -= scores.max()
@@ -145,7 +164,7 @@ def rank_candidates(
             structural, kind_log, duration_log, repeat_log = structure_score(
                 final_structure, kind, durations, repeats
             )
-            movement = np.minimum(np.abs(motion - expected_motion), 5).mean()
+            movement = movement_cost(motion, expected_motion)
             readability = readability_cost(obj, objects, settings["cs"], settings["ar"])
             motif_cost = motif_memory.cost(obj, objects) if motif_memory is not None else 0.0
             score = (

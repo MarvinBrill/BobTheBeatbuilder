@@ -3,6 +3,7 @@ import torch
 from scipy.signal import find_peaks
 from scipy.ndimage import median_filter
 from .audio import FRAME_MS, tempo
+from .tempo_octave import model_tempo
 from .architecture import CENTRAL_FRAMES, AUDIO_MARGIN
 from .sequence_batches import audio_window
 from ..timing import TimingPoint, timing_at
@@ -102,7 +103,9 @@ def timing_map(prediction, audio_path, settings):
                 TimingPoint(float(anchor), float(beat), beat_confidence=float(good.mean()))
             )
         return result, "learned"
-    bpm, offset = tempo(audio_path)
+    # Octave prior: typical tempo at the target stars, else the model's own tempo head.
+    prior = settings.get("tempo_prior") or model_tempo(prediction)
+    bpm, offset = tempo(audio_path, prior)
     beat = 60000 / bpm
     return [
         TimingPoint(
