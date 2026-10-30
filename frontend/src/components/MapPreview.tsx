@@ -13,6 +13,7 @@ import { api } from "../api";
 import { PreviewObjects } from "./PreviewObjects";
 import { PreviewSoundPlayer } from "./PreviewSoundPlayer";
 import { PreviewVolume, usePreviewVolume } from "./PreviewVolume";
+import { FinishingLine, RankingCheckPanel } from "./RankingCheck";
 
 export function MapPreview({
   output,
@@ -248,6 +249,9 @@ export function MapPreview({
                 .join(" · ")}
             </p>
           )}
+          {preview.quality?.finishing && (
+            <FinishingLine summary={preview.quality.finishing} />
+          )}
           {preview.quality && (
             <p className="fine-print">
               Timing:{" "}
@@ -325,6 +329,9 @@ export function MapPreview({
             <p className="fine-print preview-sound-status" role="status">
               {soundStatus}
             </p>
+          )}
+          {preview.quality?.ranking_check && (
+            <RankingCheckPanel check={preview.quality.ranking_check} />
           )}
         </>
       ) : (

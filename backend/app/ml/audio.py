@@ -91,7 +91,7 @@ def features(path, key=None):
 def tempo(path, prior_bpm=None):
     """Audio-only tempo estimate, octave-corrected towards the tempo mappers would use."""
     import librosa
-    from .tempo_octave import grid_phase, octave_corrected
+    from .tempo_octave import grid_phase, octave_corrected, refine_tempo
 
     samples = waveform(path)
     # Same envelope beat_track computes from `y` itself (median aggregation).
@@ -108,9 +108,15 @@ def tempo(path, prior_bpm=None):
         # librosa's 120 BPM prior often reports half the tempo (99 instead of 199 BPM).
         value = float(octave_corrected(envelope, 1000 / FRAME_MS, value, prior_bpm))
     first = float(beats[0] * FRAME_MS) if len(beats) else 0.0
-    if value < reported * 0.75:
+    halved = value < reported * 0.75
+    # beat_track's tempo is quantised to whole frames (200 BPM -> 198.77 BPM) and drifts by
+    # a beat every ~45 s; fit tempo and phase to all onsets of the song instead.
+    refined, phase = refine_tempo(envelope, 1000 / FRAME_MS, value)
+    if refined != value:
+        value, first = refined, phase
+    if halved:
         # Halved: every second tracked beat is a downbeat; keep the stronger phase.
-        first = grid_phase(envelope, 1000 / FRAME_MS, 60000 / value, (first, first + 60000 / reported))
+        first = grid_phase(envelope, 1000 / FRAME_MS, 60000 / value, (first, first + 30000 / value))
     return value, first % (60000 / value)
 
 

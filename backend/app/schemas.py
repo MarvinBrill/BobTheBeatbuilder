@@ -101,6 +101,11 @@ class GenerateRequest(BaseModel):
     # set new combos on bar boundaries (the combo head alone almost never starts one).
     style_from_stars: bool = True
     combos: bool = True
+    # Editor layers after generation: basic hitsounds (claps on 2/4, finishes on kiai and
+    # drops, whistles on calm downbeats), kiai on sustained loud sections, break periods.
+    hitsounds: Literal["off", "basic", "full"] = "basic"
+    kiai: bool = True
+    breaks: bool = True
     calibrate: bool = False
     calibration_rounds: int = Field(default=3, ge=1, le=5)
     # "patterns": the model chooses each next note on the beat grid (style-v2 models).

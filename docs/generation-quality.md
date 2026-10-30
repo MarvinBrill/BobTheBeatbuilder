@@ -98,7 +98,9 @@ Causes and changes:
   close to 0, which is exactly a stacked note's value, and distances in /512 units made a
   150 px jump versus a stack almost free. Once stacked, the ratio to the previous distance
   kept it stacked. `candidate_selection.movement_cost` now weights direction by the model's
-  certainty and compares the spacing on a log scale.
+  certainty and compares the spacing on a log scale. The song's first object has no
+  predecessor (its distance is measured from the playfield centre), so it skips the
+  spacing comparison; otherwise that term alone outweighed a supported slider.
 - **An almost empty style condition.** With only stars/AR/CS/OD/HP set, the model sees a
   condition it rarely trained with (free validation always passes the full reference style
   and moved 100–150 px). Unset style groups are now filled with the typical values of the

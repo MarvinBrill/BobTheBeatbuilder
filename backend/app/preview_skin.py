@@ -17,7 +17,14 @@ from .config import DATA, READER
 from .library import hash_path
 
 router = APIRouter(prefix="/api/preview-skin")
-SAMPLES = ("hitnormal", "slidertick", "sliderslide")
+SAMPLES = (
+    "hitnormal",
+    "hitwhistle",
+    "hitfinish",
+    "hitclap",
+    "slidertick",
+    "sliderslide",
+)
 FORMATS = {".wav": "audio/wav", ".ogg": "audio/ogg", ".mp3": "audio/mpeg"}
 lock = Lock()
 

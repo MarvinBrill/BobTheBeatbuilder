@@ -16,6 +16,7 @@ import numpy as np
 from scipy.ndimage import uniform_filter1d
 from .audio import FRAME_MS
 from ..timing import red_points, timing_at
+from ..tiers import preempt_ms, rules_for, settings_stars
 
 DROP_JUMP_DB = 5.0
 BUILD_UP_MAX_DB = -4.0
@@ -28,10 +29,21 @@ FILL_START_MS = 5000  # no gap spinner within the first seconds after the first 
 
 
 def recovery_ms(beat, settings):
-    """Time between the spinner end and the next object, at least one beat."""
-    ar = float(settings.get("ar", 9))
-    preempt = 1200 + 600 * (5 - ar) / 5 if ar < 5 else 1200 - 750 * (ar - 5) / 5
-    return max(beat, 0.5 * preempt, 300.0)
+    """Time between the spinner end and the next object.
+
+    At least one beat, half the approach time, and the Ranking Criteria's recovery for
+    the target tier (Easy 4 beats, Normal 2, Hard 1).
+    """
+    preempt = preempt_ms(settings.get("ar", 9))
+    rules = rules_for(settings_stars(settings))
+    beats = max(1.0, rules.spinner_recovery_beats) if rules else 1.0
+    return max(beats * beat, 0.5 * preempt, 300.0)
+
+
+def min_spinner_ms(beat, settings):
+    """Shortest spinner: one second, and the RC minimum of the tier (Easy 4 beats, ...)."""
+    rules = rules_for(settings_stars(settings))
+    return max(MIN_SPINNER_MS, (rules.spinner_min_beats if rules else 0) * beat)
 
 
 def grid_point(timing, time):
@@ -82,7 +94,8 @@ def drop_spinners(loudness, active, timing, start, end, settings):
         drop = snap_to_beat(peak * FRAME_MS, timing)
         beat = beat_at(timing, drop)
         span_end = drop - recovery_ms(beat, settings)
-        length = float(np.clip(4 * beat, MIN_SPINNER_MS, MAX_SPINNER_MS))
+        shortest = min_spinner_ms(beat, settings)
+        length = float(np.clip(4 * beat, shortest, max(MAX_SPINNER_MS, shortest)))
         span_start = span_end - length
         first, final = int(span_start / FRAME_MS), int(span_end / FRAME_MS)
         if (
@@ -117,7 +130,10 @@ def fill_spinners(objects, active, timing, end, settings, existing=()):
             continue
         span_start = release + lead_ms(beat)
         span_end = min(following - recovery_ms(beat, settings), span_start + MAX_SPINNER_MS * 2)
-        if span_start < objects[0].time + FILL_START_MS or span_end - span_start < MIN_SPINNER_MS:
+        if (
+            span_start < objects[0].time + FILL_START_MS
+            or span_end - span_start < min_spinner_ms(beat, settings)
+        ):
             continue
         first, final = int(span_start / FRAME_MS), int(span_end / FRAME_MS)
         if final > len(active) or active[first:final].mean() < 0.95:

@@ -18,6 +18,8 @@ export const generationHelp = {
     "Wie stark der Rhythmus der vom Modell gelernten lokalen Notendichte folgt. Verhindert, dass ein einmal begonnener Stream bis zum Songende weiterläuft, und lässt in ruhigen Abschnitten Pausen zu. 0 = aus (altes Verhalten).",
   dynamics:
     "Wie stark leise Stellen ruhiger gemappt werden. Bei 1 halbiert sich die Zieldichte pro 6 dB, die ein Abschnitt leiser ist als die lauten Teile des Songs. 0 = Lautstärke ignorieren.",
+  hitsounds:
+    "Grundlage nach dem Hitsound-Guide aus dem osu!-Forum: Claps folgen der Snare auf Schlag 2 und 4, Finishes markieren Becken-Crashes (Kiai-Start, Drop, Phrasenanfang), in ruhigen Teilen ersetzen Whistles die Claps. Lautstärke folgt dem Abschnitt (ruhig 50 %, normal 65 %, Kiai 80 %). Ein Startpunkt zum Nachhören – kein Ersatz für Hitsounding nach Gehör.",
   temperature:
     "Vielfalt der Positions- und Kurvenkandidaten. Niedrig bleibt näher an den wahrscheinlichsten Modellvorschlägen; höher erlaubt stärkere Varianten. Ändert nicht direkt die Objektdichte oder die Treffergenauigkeit. Mehr Vielfalt bedeutet nicht automatisch bessere Maps.",
 };

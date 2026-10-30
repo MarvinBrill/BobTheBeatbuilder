@@ -16,6 +16,8 @@ from .continuation_search import choose_continuation
 from .motif_memory import MotifMemory, analysis_spans, link_spans
 from .style import GAP_BEATS, REST, STREAM_GAP, allowed_gaps
 from .rhythm_guidance import build_guide, loudness_profile
+from .movement_guidance import build_movement_guide
+from .melodic_onsets import DEFAULT_WEIGHT as MELODIC_WEIGHT, combined_onsets
 from .spinners import drop_spinners, fill_spinners
 from ..timing import red_points
 
@@ -461,7 +463,11 @@ def generate_objects_v2(
     if motif_memory is None and settings.get("motifs", False):
         motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
     active = np.max(mel, axis=1) > -0.7
-    onset = prediction[:, 0]
+    # The learned onsets mostly follow the drums; melodic (vocal/lead) note starts are added
+    # as extra evidence so the rhythm can follow the singer between the drum hits.
+    onset = combined_onsets(
+        prediction[:, 0], mel, settings.get("melodic_onsets", MELODIC_WEIGHT)
+    )
     duration = (len(mel) - 1) * FRAME_MS / 1000
     start, stop = evaluation_range if evaluation_range is not None else (0, duration * 1000)
     if not 0 <= start < stop <= duration * 1000 + FRAME_MS:
@@ -480,6 +486,7 @@ def generate_objects_v2(
     run, central_cache, generated_plan, truncated = 0, None, None, False
     guide = build_guide(prediction, mel, settings)
     loudness = loudness_profile(mel)
+    movement = build_movement_guide(settings, loudness, FRAME_MS)
     spans = []
     if first is not None:
         spans = [
@@ -532,6 +539,7 @@ def generate_objects_v2(
                 selected_device,
                 trace,
                 motif_memory=motif_memory,
+                guide=movement,
             )[0]
             objects.append(chosen.obj)
             repairs.append(chosen.repair)
@@ -587,6 +595,7 @@ def generate_objects_v2(
         evaluation_end_ms=float(stop),
         spinners=[[float(left), float(right)] for left, right in spinners],
         density_guidance=guide is not None,
+        movement_guidance=movement is not None,
         selected_count_before_limit=len(objects) + int(truncated),
         truncated=truncated,
         skipped_interior_heads=0,

@@ -6,6 +6,8 @@ from .movement import motion_numpy, history_context, bezier_points
 from .architecture import DURATION_BEATS
 from .slider_geometry import fit_curve_bounds, curve_diagnostics
 from .generation_trace import object_snapshot
+from .movement_guidance import min_slider_length, target_velocity, velocity_band
+from ..tiers import rules_for, settings_stars
 
 
 def circle_radius(cs):
@@ -86,6 +88,26 @@ def candidate_object(
     duration = min(duration_beats * beat, available)
     fitting = [value * beat for value in DURATION_BEATS if value * beat <= duration + 1e-6]
     duration = max(fitting, default=0)
+    slowest, fastest = velocity_band(settings)
+    wanted = target_velocity(settings)
+    if slider and length > 0 and duration > 0 and wanted is not None:
+        velocity = length * repeats * beat / (140 * duration)
+        if not slowest <= velocity <= fastest:
+            # Keep the learned shape but scale it to the requested velocity instead of
+            # writing a 30 px slider that crawls for a whole beat at 0.2x. One shared
+            # velocity also keeps the number of green lines down.
+            scaled = fit_curve_bounds((curve - curve[0]) * (wanted / velocity) + curve[0], margin)
+            scaled = np.rint(scaled)
+            if trace is not None:
+                trace.record(
+                    "candidate_guard",
+                    time=time,
+                    candidate_id=candidate_id,
+                    reason="slider_velocity_scaled",
+                    velocity=velocity,
+                    wanted=wanted,
+                )
+            curve, length = scaled, curve_length(scaled.tolist())
     if trace is not None and slider and duration < duration_beats * beat - 1e-6:
         trace.record(
             "candidate_guard",
@@ -96,13 +118,14 @@ def candidate_object(
             requested_ms=duration_beats * beat,
             final_ms=duration,
         )
-    if not slider or length < 20 or duration < beat * DURATION_BEATS[0]:
+    shortest = min_slider_length(settings)
+    if not slider or length < shortest or duration < beat * DURATION_BEATS[0]:
         if trace is not None and slider:
             trace.record(
                 "slider_fallback",
                 time=time,
                 candidate_id=candidate_id,
-                reason="short_path" if length < 20 else "insufficient_duration",
+                reason="short_path" if length < shortest else "insufficient_duration",
             )
         curve[:] = curve[0]
         obj = HitObject(
@@ -127,7 +150,7 @@ def candidate_object(
                 )
             return None
         velocity = length * repeats * beat / (140 * duration)
-        if not 0.1 <= velocity <= 10:
+        if not slowest - 0.01 <= velocity <= fastest + 0.01:
             if trace is not None:
                 trace.record(
                     "candidate_rejected",
@@ -192,6 +215,53 @@ def readability_cost(obj, history, cs, ar):
         if radius * 0.4 < distance < radius * 1.8:
             penalty += (1 - gap / approach) * (1 - distance / (radius * 1.8))
     return penalty
+
+
+LOW_DIFFICULTY_HISTORY = 8
+
+
+def low_difficulty_cost(obj, history, beat, settings):
+    """Readability for Easy/Normal targets (0 for harder maps).
+
+    * Reading order: a note that sits visually closer to the object before its predecessor
+      than to the predecessor itself is read in the wrong order by new players, who follow
+      the closest circle rather than the numbers (osu! forum poll t/2247525, 2026).
+    * Distance snap: the Ranking Criteria ask Easy/Normal for time-distance equality
+      within 0.8-1.2x (Easy) / 0.8-1.3x (Normal) of the map's spacing.
+    """
+    rules = rules_for(settings_stars(settings))
+    if rules is None or rules.distance_snap is None or not history:
+        return 0.0
+    radius = circle_radius(settings["cs"])
+    previous = history[-1]
+    gap = (obj.time - previous.time - previous.duration) / max(beat, 1.0)
+    spacing = math.hypot(obj.x - previous.end_x, obj.y - previous.end_y)
+    cost = 0.0
+    if len(history) >= 2 and gap <= 2.05 and spacing > 2 * radius:
+        first = history[-2]
+        decoy = min(
+            math.hypot(obj.x - first.x, obj.y - first.y),
+            math.hypot(obj.x - first.end_x, obj.y - first.end_y),
+        )
+        if 3 <= decoy < spacing:
+            cost += 1 - decoy / spacing
+    if 0.25 <= gap <= rules.distance_snap_max_beats + 0.01 and spacing >= 3:
+        ratios = []
+        recent = history[-LOW_DIFFICULTY_HISTORY - 1 :]
+        for left, right in zip(recent, recent[1:]):
+            beats = (right.time - left.time - left.duration) / max(beat, 1.0)
+            distance = math.hypot(right.x - left.end_x, right.y - left.end_y)
+            if 0.25 <= beats <= rules.distance_snap_max_beats + 0.01 and distance >= 3:
+                ratios.append(distance / beats)
+        if len(ratios) >= 3:
+            typical = float(np.median(ratios))
+            low, high = rules.distance_snap
+            ratio = spacing / gap / max(typical, 1e-6)
+            if ratio < low:
+                cost += 3 * math.log(low / ratio)
+            elif ratio > high:
+                cost += 3 * math.log(ratio / high)
+    return float(cost)
 
 
 def quality_report(objects, settings):

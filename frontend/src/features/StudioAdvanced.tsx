@@ -19,6 +19,9 @@ export const defaultAdvanced = {
   style_from_stars: true,
   combos: true,
   rhythm_mode: "patterns" as "patterns" | "onsets",
+  hitsounds: "basic" as "off" | "basic" | "full",
+  kiai: true,
+  breaks: true,
 };
 
 export function StudioAdvanced({
@@ -195,6 +198,38 @@ export function StudioAdvanced({
             onChange={(event) => update({ combos: event.target.checked })}
           />{" "}
           Neue Combos an Takten, nach Pausen und Spinnern setzen
+        </label>
+        <label>
+          Hitsounds
+          <select
+            value={value.hitsounds}
+            onChange={(event) =>
+              update({
+                hitsounds: event.target.value as "off" | "basic" | "full",
+              })
+            }
+          >
+            <option value="basic">Basis: Clap auf 2 und 4, Finish auf Drops und Kiai</option>
+            <option value="full">Voll: zusätzlich Whistle auf jedem Taktanfang</option>
+            <option value="off">Aus: nur Hitnormals</option>
+          </select>
+          <small>{generationHelp.hitsounds}</small>
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={value.kiai}
+            onChange={(event) => update({ kiai: event.target.checked })}
+          />{" "}
+          Kiai auf lauten Abschnitten (Refrain/Drop), Preview-Point am ersten Kiai
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={value.breaks}
+            onChange={(event) => update({ breaks: event.target.checked })}
+          />{" "}
+          Break-Perioden in langen Pausen (kein HP-Verlust)
         </label>
         <Slider
           label="Variantenvielfalt"

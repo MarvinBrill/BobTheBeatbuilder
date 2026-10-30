@@ -7,7 +7,7 @@ from app.ml.audio import FRAME_MS
 from app.ml.rhythm_guidance import RhythmGuide, density_rate, dynamics_factor, loudness_profile
 from app.ml.sequence_generation import choose_next_time, placed_spinners
 from app.ml.spinners import drop_spinners, fill_spinners
-from app.ml.tempo_octave import octave_corrected
+from app.ml.tempo_octave import octave_corrected, refine_tempo
 
 FPS = 1000 / FRAME_MS
 SETTINGS = dict(
@@ -33,6 +33,17 @@ def test_half_tempo_from_the_beat_tracker_is_doubled_only_when_equally_periodic(
     assert octave_corrected(even, FPS, 200.0, 186) == pytest.approx(200)
     # A clear 100 BPM pulse with weak off-beats stays at 100 BPM.
     assert octave_corrected(pulse_train(0.6, offbeat=0.3), FPS, 100.0, 186) == pytest.approx(100)
+
+
+def test_frame_quantised_tempo_is_refined_to_the_real_grid():
+    # beat_track reports 200 BPM as 198.77 BPM (26 frames); that drifts a beat every ~45 s.
+    song = pulse_train(0.3, seconds=120)
+    bpm, phase = refine_tempo(song, FPS, 60000 / (26 * FRAME_MS))
+    assert bpm == pytest.approx(200, abs=0.05)
+    assert min(phase, 300 - phase) < FRAME_MS
+    # Without a clearly periodic grid the coarse estimate is kept.
+    noise = np.random.default_rng(0).random(int(60 * FPS))
+    assert refine_tempo(noise, FPS, 150.0)[0] == 150.0
 
 
 def loud_and_quiet_mel(frames=3000, quiet=slice(1500, 3000), drop_db=12):

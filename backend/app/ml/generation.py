@@ -21,6 +21,8 @@ from .sequence_generation import generate_objects, generate_objects_v2
 from .architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA
 from .generation_trace import GenerationTrace, object_snapshot
 from .combos import assign_combos
+from .finishing import finish_map
+from ..ranking_check import ranking_check
 from . import style
 
 STAR_TOLERANCE = 0.15
@@ -115,8 +117,13 @@ def trained_star_range(metadata):
     return max(0.5, min(values) - 0.25), min(12.0, max(values) + 0.25)
 
 
-def calibration_step(settings, target, stars, attributes, profile, star_range):
+def calibration_step(settings, target, stars, attributes, profile, star_range, patterns=None):
     """Next calibration settings from the measured stars and their aim/speed split.
+
+    `patterns` (the map's own measured style, see `pattern_summary`) catches an aim deficit
+    the aim/speed split hides: when the spacing collapses, aim *and* speed drop and the
+    split can still look aim-heavy. A measured jump spacing far below the requested one
+    therefore also pulls the jump lever instead of densifying the rhythm.
 
     Raising the condition stars and a uniform `tempo_bias` were the only levers before; both
     push every gap of the song towards 1/4 when the real deficit is aim (tiny spacing), which
@@ -140,12 +147,19 @@ def calibration_step(settings, target, stars, attributes, profile, star_range):
     share = aim / (aim + speed) if aim + speed > 0 else typical_share
     user_style = settings.get("style") or {}
     lever = "jump_spacing" not in user_style and bool(profile and profile.get("jump_spacing"))
-    if error > 0 and share < typical_share - 0.05 and lever:
+    calibrated = settings.get("calibration_style") or {}
+    measured_jump = (patterns or {}).get("jump_spacing")
+    collapsed = bool(
+        lever
+        and measured_jump is not None
+        and measured_jump < 0.75 * calibrated.get("jump_spacing", profile["jump_spacing"])
+    )
+    if error > 0 and lever and (share < typical_share - 0.05 or collapsed):
         # Aim is missing: wider jumps, never denser rhythm.
         updated["tempo_bias"] = float(np.clip(min(settings["tempo_bias"], 0.0) - 0.1, -1, 1))
-        current = settings.get("calibration_style", {}).get("jump_spacing", profile["jump_spacing"])
+        current = calibrated.get("jump_spacing", profile["jump_spacing"])
         updated["calibration_style"] = {
-            **settings.get("calibration_style", {}),
+            **calibrated,  # the stored setting can be an explicit None
             "jump_spacing": float(np.clip(current * (1 + 0.15 * min(error, 2)), 40, 400)),
         }
     else:
@@ -163,13 +177,26 @@ def mark_spinner_combos(objects, spinners):
     return spinners
 
 
-def verified_write(path, objects, settings, audio_name, timing, trace=None, spinners=()):
+def verified_write(
+    path, objects, settings, audio_name, timing, trace=None, spinners=(), finish=None
+):
     """Write the map and check that osu! will read back exactly the generated objects."""
     bpm, offset = 60000 / timing[0].beat_length, timing[0].time
-    write(path, objects, settings, audio_name, bpm, offset, timing, spinners)
+    exported = finish.export() if finish is not None else None
+    write(path, objects, settings, audio_name, bpm, offset, timing, spinners, exported)
     verified = parse(path)
     if len(verified.objects) != len(objects):
         raise ValueError("Generated beatmap validation failed")
+    if finish is not None:
+        expected_breaks = [tuple(map(float, span)) for span in finish.breaks]
+        if [tuple(span) for span in verified.breaks] != expected_breaks:
+            raise ValueError("Break periods changed during export")
+        if verified.preview_time != finish.preview_time:
+            raise ValueError("Preview point changed during export")
+        if [obj.hitsound for obj in verified.objects] != [int(obj.hitsound) for obj in objects]:
+            raise ValueError("Hitsounds changed during export")
+        if verified.sound_points and verified.sound_points[0][2]:
+            raise ValueError("The first timing point must not toggle kiai")
     expected_spinners = [(round(start), round(end)) for start, end in sorted(spinners)]
     if [(round(start), round(end)) for start, end in verified.ignored] != expected_spinners:
         raise ValueError("Spinner timing changed during export")
@@ -252,6 +279,9 @@ def generate(settings, context, trace=None):
         "max_stream": 0,
         "tempo_bias": 0.0,
         "rhythm_mode": "patterns",
+        "hitsounds": "basic",
+        "kiai": True,
+        "breaks": True,
         **settings,
     }
     if trace is None and settings.get("trace", False):
@@ -393,7 +423,13 @@ def generate(settings, context, trace=None):
             ratio = target / max(stars, 0.5)
             if styled:
                 settings = calibration_step(
-                    settings, target, stars, attributes, profile, star_range
+                    settings,
+                    target,
+                    stars,
+                    attributes,
+                    profile,
+                    star_range,
+                    pattern_summary(objects, settings, timing),
                 )
             else:
                 settings["density"] = float(np.clip(settings["density"] * ratio**0.8, 0.5, 10))
@@ -401,20 +437,34 @@ def generate(settings, context, trace=None):
         _, objects, timing, report, attributes, spinners = best
         candidate.unlink(missing_ok=True)
         export_audio(audio_path, directory / audio_name)
+        # Editor layers the model does not learn: kiai, preview point, breaks, hitsounds.
+        finish = finish_map(objects, timing, spinners, mel, settings)
         bpm, offset = verified_write(
-            directory / "map.osu", objects, settings, audio_name, timing, trace, spinners
+            directory / "map.osu", objects, settings, audio_name, timing, trace, spinners, finish
         )
         if known_timing:
             report["timing_source"] = known_timing["timing_source"]
         report["difficulty"] = attributes
         report["calibration"] = history
         report["patterns"] = pattern_summary(objects, settings, timing)
+        report["finishing"] = finish.summary
+        report["ranking_check"] = ranking_check(
+            objects,
+            spinners,
+            timing,
+            settings,
+            stars=attributes["star_rating"] if attributes else target,
+            audio_ms=duration_ms,
+            finish=finish,
+        )
         with zipfile.ZipFile(directory / "beatmap.osz", "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(directory / "map.osu", "map.osu")
             archive.write(directory / audio_name, audio_name)
         preview = {
             "objects": [asdict(obj) for obj in objects],
             "spinners": [[float(start), float(end)] for start, end in spinners],
+            "kiai": [[float(start), float(end)] for start, end in finish.kiai],
+            "breaks": [[float(start), float(end)] for start, end in finish.breaks],
             "duration": len(mel) * FRAME_MS / 1000,
             "bpm": bpm,
             "offset": offset,

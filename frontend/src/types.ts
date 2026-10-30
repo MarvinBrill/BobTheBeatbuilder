@@ -184,8 +184,41 @@ export interface HitObject {
 export interface PreviewSound {
   time: number;
   end?: number;
-  sample: "hitnormal" | "slidertick" | "sliderslide";
+  sample:
+    | "hitnormal"
+    | "hitwhistle"
+    | "hitfinish"
+    | "hitclap"
+    | "slidertick"
+    | "sliderslide";
   volume: number;
+}
+export interface RankingFinding {
+  id: string;
+  severity: "problem" | "warning" | "info";
+  title: string;
+  message: string;
+  count: number;
+  /** Editor timestamps (mm:ss:mmm), at most six. */
+  times: string[];
+}
+export interface RankingCheck {
+  tier: string | null;
+  stars: number | null;
+  problems: number;
+  warnings: number;
+  findings: RankingFinding[];
+  note: string;
+}
+export interface FinishingSummary {
+  hitsounds: "off" | "basic" | "full";
+  kiai_sections: number;
+  kiai_seconds: number;
+  breaks: number;
+  preview_time: number;
+  claps?: number;
+  finishs?: number;
+  whistles?: number;
 }
 export interface Preview {
   sound_events?: PreviewSound[];
@@ -201,6 +234,8 @@ export interface Preview {
     difficulty?: Record<string, number> | null;
     calibration?: { round: number; stars: number | null }[];
     patterns?: Record<string, number>;
+    finishing?: FinishingSummary;
+    ranking_check?: RankingCheck;
   };
   objects: HitObject[];
   duration: number;

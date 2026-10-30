@@ -8,7 +8,8 @@ import torch
 
 from .architecture import DURATION_BEATS
 from .generation_trace import object_snapshot
-from .playability import candidate_object, readability_cost
+from .movement_guidance import head_geometry
+from .playability import candidate_object, low_difficulty_cost, readability_cost
 from .slider_geometry import geometry_candidates
 
 
@@ -22,7 +23,7 @@ class Candidate:
     identifier: object
 
 
-def movement_cost(motion, expected):
+def movement_cost(motion, expected, spacing=True):
     """Deviation of a candidate's movement from the model's expected movement.
 
     `expected` is a regression output, i.e. a conditional mean. For direction (cosine and
@@ -31,14 +32,18 @@ def movement_cost(motion, expected):
     map collapsed to 0-5 px spacing. Direction now only counts as far as the model is sure
     of it, and the spacing itself is compared on a log scale, where the old /512 units made
     a 150 px jump versus a stack nearly free.
+
+    Without a previous object (`spacing=False`) the distance feature is measured from the
+    playfield centre, so the log-spacing comparison would only pull the song's first object
+    towards a meaningless reference and outweigh its structure evidence.
     """
     motion, expected = np.asarray(motion, np.float64), np.asarray(expected, np.float64)
     deviation = np.minimum(np.abs(motion - expected), 5)
     certainty = float(np.clip(np.hypot(expected[2], expected[3]), 0, 1))
     weights = np.array([1, 1, certainty, certainty, 1, 1, 1, 1], np.float64)
     distance, wanted = max(0.0, motion[0] * 512), max(0.0, expected[0] * 512)
-    spacing = abs(math.log((distance + 16) / (wanted + 16)))
-    return float((deviation * weights).sum() / len(weights) + 0.5 * spacing)
+    gap = abs(math.log((distance + 16) / (wanted + 16))) if spacing else 0.0
+    return float((deviation * weights).sum() / len(weights) + 0.5 * gap)
 
 
 def probabilities(logits, temperature=1):
@@ -92,7 +97,13 @@ def rank_candidates(
     trace=None,
     branch="head",
     motif_memory=None,
+    guide=None,
 ):
+    """Candidates for the object at `time`, best first.
+
+    `guide` (a MovementGuide) adds jump proposals at the requested spacing and soft costs
+    for spacing collapse, border hugging, orbiting and a runaway slider share.
+    """
     if not all(torch.isfinite(value).all() for value in output.values()):
         raise ValueError("Non-finite object prediction from model")
     raw = output["geometry"][0, -1].cpu().numpy().reshape(model.config.mixtures, 17)
@@ -127,10 +138,24 @@ def rank_candidates(
                     branch=branch,
                     replaced_geometry_index=len(geometries) - 1,
                 )
+    if guide is not None and objects:
+        # The most likely learned shape, moved to the requested jump distance: a jump
+        # exists even when every mixture mean sits on top of the previous object.
+        base = means[int(np.argmax(weights))]
+        jumps = [
+            (head_geometry(base, head), False) for head in guide.jump_heads(time, objects, beat)
+        ]
+        if jumps:
+            geometries = geometries[:geometry_count] + jumps
+            if trace is not None:
+                trace.record("jump_proposals", time=time, branch=branch, count=len(jumps))
     for geometry_index, (proposal, _mode) in enumerate(geometries):
         for structure_index, structure in enumerate(structures):
             candidate_id = f"{branch}:{geometry_index * len(structures) + structure_index}"
-            if geometry_index * len(structures) + structure_index >= count:
+            # The candidate cap applies to the learned proposals; jump proposals come on top.
+            if geometry_index < geometry_count and (
+                geometry_index * len(structures) + structure_index >= count
+            ):
                 break
             slider, duration_index, repeat_index = structure
             duration = DURATION_BEATS[duration_index] if slider else 0
@@ -164,16 +189,20 @@ def rank_candidates(
             structural, kind_log, duration_log, repeat_log = structure_score(
                 final_structure, kind, durations, repeats
             )
-            movement = movement_cost(motion, expected_motion)
+            movement = movement_cost(motion, expected_motion, spacing=bool(objects))
             readability = readability_cost(obj, objects, settings["cs"], settings["ar"])
+            beginner = low_difficulty_cost(obj, objects, beat, settings)
             motif_cost = motif_memory.cost(obj, objects) if motif_memory is not None else 0.0
+            guidance = guide.cost(obj, objects, beat) if guide is not None else 0.0
             score = (
                 0.15 * likelihood
                 + structural
                 - movement
                 - 3 * repair
                 - 0.3 * readability
+                - 0.5 * beginner
                 - 0.15 * motif_cost
+                - guidance
             )
             candidates.append(Candidate(obj, geometry, motion, float(score), repair, candidate_id))
             if trace is not None:
@@ -191,7 +220,9 @@ def rank_candidates(
                     weighted_movement=-movement,
                     weighted_repair=-3 * repair,
                     weighted_readability=-0.3 * readability,
+                    weighted_low_difficulty=-0.5 * beginner,
                     weighted_motif=-0.15 * motif_cost,
+                    weighted_guidance=-guidance,
                     score_before_compatibility=score,
                     structure_probabilities_used_in_score=True,
                 )

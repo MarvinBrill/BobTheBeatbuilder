@@ -654,3 +654,91 @@
 .output-row .text-button > span {
   overflow-wrap: anywhere;
 }
+.ranking-check {
+  margin: 4px 17px 17px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--color-paper-3);
+}
+.ranking-check summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink-2);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+.ranking-check summary svg {
+  color: var(--color-tint);
+  flex: none;
+}
+.rc-count {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--color-ink-4);
+}
+.rc-count.has-problems {
+  color: var(--color-error);
+}
+.ranking-check ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.rc-finding {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.rc-finding b {
+  color: var(--color-ink-15);
+  font-weight: 600;
+}
+.rc-finding p {
+  margin: 2px 0 0;
+  color: var(--color-ink-3);
+}
+.rc-finding code {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-lavender);
+  overflow-wrap: anywhere;
+}
+.rc-severity {
+  align-self: start;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+.rc-problem .rc-severity {
+  color: var(--color-error);
+  background: var(--color-error-surface);
+}
+.rc-warning .rc-severity {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+.rc-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.rc-actions .fine-print {
+  margin: 12px 0 0;
+}
+.rc-actions .secondary {
+  margin-top: 12px;
+}

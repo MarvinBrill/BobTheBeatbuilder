@@ -22,11 +22,12 @@ import { generationHelp } from "./generationHelp";
 
 const AUDIO_TYPES = [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"];
 const MAX_UPLOAD = 512 * 1024 * 1024;
+// AR/OD inside the Ranking Criteria guideline ranges of each tier.
 const presets = [
-  { name: "Easy", ar: 5, od: 3, density: 1.5 },
-  { name: "Normal", ar: 7, od: 5, density: 2.5 },
-  { name: "Hard", ar: 9, od: 7, density: 4 },
-  { name: "Insane", ar: 9.5, od: 9, density: 6 },
+  { name: "Easy", ar: 4, od: 2, density: 1.5 },
+  { name: "Normal", ar: 5.5, od: 4, density: 2.5 },
+  { name: "Hard", ar: 7.5, od: 6, density: 4 },
+  { name: "Insane", ar: 9, od: 8, density: 6 },
 ];
 
 export function Studio({

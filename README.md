@@ -22,6 +22,8 @@ Beatmaps + audio → curated dataset → train one model → new audio → .osz 
 - **Mapper styles**: guest difficulties are credited to the guest mapper ("NiNo's Insane" in a Sotarks set counts for NiNo); mappers with enough maps get a learned embedding plus a measured style profile.
 - **Pattern controls**: bursts, streams, stream length and spacing, 1/2 jump distance, sharp vs. linear angles, stacks, slider share/velocity/kick sliders, combo length, aim/speed balance. The decoder chooses the rhythm itself on the beat grid, so triples, bursts, streams and 1/2 jump sections are learned as sequences.
 - Generation controls for AR, CS, OD, HP, density, slider preference, spacing, directional flow, variation, and timing.
+- **Finishing like a mapper would**: kiai on loud sections, preview point, break periods, basic hitsounds (claps on 2 and 4, finishes on drops and kiai, whistles in calm parts) and per-section volume, following the osu! Ranking Criteria and the community hitsounding guide.
+- **RC check** per difficulty tier (Easy … Expert): settings ranges, spinner recovery, overlaps, stream/1-2 chains, distance snap and reading order for new players, snapping, drain time; findings carry editor timestamps and can be copied as modding text.
 - Audio/playfield preview, volume control, and `.osz` export for osu!lazer.
 - Model download/import using Safetensors weights and metadata.
 - Storage management for models, outputs, datasets, uploads, caches, imports, and orphaned files.
@@ -170,12 +172,14 @@ The current architecture is **phrase-mapper-v5**, model format **5**, target sch
 
 Generation combines learned predictions with timing selection and playability constraints. Models trained with style conditioning (style v2) choose each next note from beat-grid gap classes (1/8 to 8 beats plus pauses), combined with the onset prediction; older models keep the previous onset selection. With **target stars** and calibration, the finished map is measured with the official calculator and re-generated (up to five rounds) until it is within ±0.15 ★; the closest round is kept. Pattern values left on automatic are inferred from the music, the target stars and the mapper. Enter BPM and offset manually when you know them: automatic timing can fall back to a constant-tempo estimate.
 
-- **osu!standard only.** Mania, taiko, and catch are unsupported; spinners are not generated.
+- **osu!standard only.** Mania, taiko, and catch are unsupported; spinners, kiai, breaks and hitsounds are placed by rules, not learned.
+- **Not rankable.** The Ranking Criteria require hit objects, hitsounds and timing to come from direct human input; generated maps are tagged as AI-assisted drafts.
 - Slider targets use one cubic Bézier approximation, 1–4 traversals, and discrete durations up to 16 beats. Unsupported geometry still contributes its start position and object type, but not its curve target.
 - Complex tempo changes, swing, unusual sliders, and long-range structure may need editing. Automatic timing can fall back to a constant-tempo audio estimate; manual BPM/offset controls are available.
 - Training mainly uses reference object history. Free generation can accumulate errors. The optional own-position objective remains experimental because comparisons showed mixed results.
 - Rhythm selection uses a bounded sequence search and a soft density target. Object planning compares circle/slider structure and geometry together; a weak interior onset can yield to a supported sustained slider, while strong accents remain protected.
 - Timing and geometry guards reject overlaps, extreme movement, loops, sharp hooks, and excessive detours. They can also exclude intentional specialist patterns. Unsuitable sliders can fall back to circles. The movement ceiling is independent of OD.
+- Song-level guidance keeps free generation tied to the requested style (API flags in brackets, all on by default): spacing stays in a band around the requested stream/jump spacing, smaller in quiet parts, with extra jump proposals in varied directions; border hugging and circling the playfield centre cost a little; the slider share is pulled towards the requested ratio, and sliders too slow or too fast are scaled to the requested slider velocity (`movement_guidance`, `slider_guidance`). Melodic onsets (vocals/lead, from a harmonic/percussive split of the audio) add rhythm evidence between the drum hits (`melodic_onsets`, weight 0-1, default 0.6). The audio-only tempo fallback is refined to sub-frame precision.
 - Optional API flags `trace`, `lookahead`, and `motifs` expose decisions or enable bounded experiments. Lookahead and motif memory default to off. Full manual timing sections can preserve meter and bar origin; BPM/offset alone does not establish a downbeat.
 - No claim of ranked-map quality or state-of-the-art performance. Evaluate generated maps on unfamiliar songs through actual gameplay.
 
@@ -211,7 +215,7 @@ The playfield preview has separate, remembered volume controls for music and hit
 
 Samples are read directly from an installed lazer skin in the configured osu! data folder. The default search is `ssM4in`; if several names match, the currently selected matching osu! skin is preferred. No skin audio is bundled in this repository or copied into generated beatmaps. The reader opens a temporary private database snapshot under `data/snapshots` and removes it afterwards; sound mappings are kept in memory.
 
-To select another skin, set `BOB_PREVIEW_SKIN` to its full name in `.env` for Docker Compose, or `$env:BOB_PREVIEW_SKIN = "Your skin name"` before starting natively. Restart the app after changing the skin configuration. Generated maps currently use the Soft sample set at 70% map volume; missing Soft samples fall back to the skin's Normal set, while explicitly empty samples remain silent. If the skin is unavailable, music playback still works and the preview displays a notice. Update an existing native installation's LazerReader and frontend using the setup script when upgrading to this feature.
+To select another skin, set `BOB_PREVIEW_SKIN` to its full name in `.env` for Docker Compose, or `$env:BOB_PREVIEW_SKIN = "Your skin name"` before starting natively. Restart the app after changing the skin configuration. Generated maps use the Soft sample set with whistle/finish/clap additions and per-section volume (50 % calm, 65 % normal, 80 % kiai; a flat 70 % when hitsounds are off). The preview plays the additions and spinner end sounds at the timing-point volume; missing Soft samples fall back to the skin's Normal set, while explicitly empty samples remain silent. If the skin is unavailable, music playback still works and the preview displays a notice. Update an existing native installation's LazerReader and frontend using the setup script when upgrading to this feature.
 
 ## Development
 
@@ -254,6 +258,7 @@ Detailed implementation and measurement notes are currently in German:
 - [Architecture work plan and decisions](docs/architecture-roadmap.md)
 - [Current architecture comparisons, corpus audit and blind playtests](docs/architecture-evaluation.md)
 - [Musical time and the learned plan](docs/musical-time.md)
+- [Mapping conventions from the osu! community: finishing pass and RC check](docs/mapping-conventions.md) (English)
 - [Preparation and idle-performance measurements](docs/preparation-performance.md)
 
 ## References and acknowledgements

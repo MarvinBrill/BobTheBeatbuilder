@@ -43,6 +43,64 @@ def grid_phase(envelope, fps, beat_ms, phases):
     return max(phases, key=strength)
 
 
+REFINE_TOLERANCE = 0.03  # search +-3 % around the coarse tempo
+REFINE_STEPS = 1201
+# The refined tempo must lock the onsets clearly better than the coarse one.
+MIN_COHERENCE_GAIN = 1.1
+# ...and lock them at all: noise reaches ~0.01, a steady song 0.3-0.6.
+MIN_COHERENCE = 0.1
+
+
+def grid_coherence(envelope, fps, bpm):
+    """How strongly the onsets of the whole song lock to one constant beat grid (0..1),
+    and the grid phase in ms that collects them."""
+    values = np.maximum(np.asarray(envelope, np.float64), 0)
+    total = values.sum()
+    if total <= 1e-12 or not math.isfinite(bpm) or bpm <= 0:
+        return 0.0, 0.0
+    beat_ms = 60000 / bpm
+    times = np.arange(len(values)) * 1000 / fps
+    phasor = (values * np.exp(2j * np.pi * times / beat_ms)).sum() / total
+    phase = (np.angle(phasor) / (2 * np.pi)) % 1 * beat_ms
+    return float(abs(phasor)), float(phase)
+
+
+def refine_tempo(envelope, fps, bpm, tolerance=REFINE_TOLERANCE, steps=REFINE_STEPS):
+    """Sub-frame tempo and phase of a constant-tempo song.
+
+    Tempogram/autocorrelation estimates are quantised to whole onset frames: with a 256
+    sample hop at 22.05 kHz a 200 BPM song is reported as 198.77 BPM (26 frames). That
+    0.6 % error drifts by a whole beat every ~45 s, so objects slide in and out of the
+    beat. Here the tempo is chosen by how coherently *all* onsets of the song fall onto
+    one grid, which resolves the period to well below a frame. Returns (bpm, phase_ms);
+    the coarse tempo is kept when no clearly better grid exists (e.g. tempo changes).
+    """
+    values = np.maximum(np.asarray(envelope, np.float64), 0)
+    if not math.isfinite(bpm) or bpm <= 0 or values.sum() <= 1e-12 or len(values) < 4 * fps:
+        return bpm, grid_coherence(values, fps, bpm)[1]
+    total = values.sum()
+    times = np.arange(len(values)) / fps  # seconds
+    candidates = bpm * np.linspace(1 - tolerance, 1 + tolerance, steps)
+    strength = np.empty(len(candidates))
+    for start in range(0, len(candidates), 64):
+        chunk = candidates[start : start + 64]
+        phasors = np.exp(2j * np.pi * np.outer(chunk / 60, times)) @ values
+        strength[start : start + len(chunk)] = np.abs(phasors) / total
+    best = int(np.argmax(strength))
+    refined = float(candidates[best])
+    if 0 < best < len(candidates) - 1:
+        left, middle, right = strength[best - 1 : best + 2]
+        curvature = left - 2 * middle + right
+        if curvature < 0:
+            step = candidates[1] - candidates[0]
+            refined += float(np.clip(0.5 * (left - right) / curvature, -0.5, 0.5)) * step
+    coarse, _ = grid_coherence(values, fps, bpm)
+    locked, phase = grid_coherence(values, fps, refined)
+    if locked < max(MIN_COHERENCE, MIN_COHERENCE_GAIN * coarse):
+        return bpm, grid_coherence(values, fps, bpm)[1]
+    return refined, phase
+
+
 def model_tempo(prediction, active=None):
     """Median tempo of the model's own tempo head (channel 3 is log(beat / 500 ms))."""
     values = np.asarray(prediction, np.float64)[:, 3]

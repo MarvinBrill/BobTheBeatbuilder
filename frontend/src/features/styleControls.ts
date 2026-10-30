@@ -201,13 +201,23 @@ export function starProfile(model: Model | undefined, stars: number): StyleProfi
 }
 
 /** Fallback when a model has no star profiles: common values of ranked maps. */
+/** Ranking Criteria guideline ranges (AR, OD, HP) per tier, by star rating. */
+const tierRanges: [number, [number, number], [number, number], [number, number]][] = [
+  [2.0, [1, 5], [1, 3], [1, 3]], // Easy
+  [2.7, [4, 6], [3, 5], [3, 5]], // Normal
+  [4.0, [6, 8], [5, 7], [4, 6]], // Hard
+  [5.3, [7, 9.3], [7, 9], [5, 8]], // Insane
+  [Infinity, [8, 10], [8, 10], [5, 10]], // Expert
+];
+
 export function typicalSettings(stars: number) {
   const clamp = (value: number, low: number, high: number) =>
     Math.round(Math.min(high, Math.max(low, value)) * 10) / 10;
+  const [, ar, od, hp] = tierRanges.find(([limit]) => stars < limit)!;
   return {
-    ar: clamp(4 + stars * 0.95, 3, 9.8),
-    od: clamp(2 + stars * 1.15, 2, 9.5),
-    hp: clamp(2 + stars * 0.7, 2, 7),
+    ar: clamp(4 + stars * 0.95, Math.max(3, ar[0]), Math.min(9.8, ar[1])),
+    od: clamp(2 + stars * 1.15, Math.max(2, od[0]), Math.min(9.5, od[1])),
+    hp: clamp(2 + stars * 0.7, Math.max(2, hp[0]), Math.min(7, hp[1])),
     cs: 4,
   };
 }
