@@ -102,12 +102,32 @@ def get(kind: str, identifier: str):
     return local(json.loads(row[0]))
 
 
-def all_records(kind: str):
+def all_records(kind: str, drop=()):
+    """All records of a kind, newest first.
+
+    `drop` names top-level keys to leave out. SQLite removes them before Python parses the JSON,
+    so a dataset's map list (many MB) never costs anything in /api/state.
+    """
+    drop = tuple(drop)
+    query = "SELECT body FROM records WHERE kind=? ORDER BY rowid DESC"
     with connect() as connection:
-        rows = connection.execute(
-            "SELECT body FROM records WHERE kind=? ORDER BY rowid DESC", (kind,)
-        ).fetchall()
-    return [local(json.loads(row[0])) for row in rows]
+        if drop:
+            paths = ",".join("?" * len(drop))
+            try:
+                rows = connection.execute(
+                    f"SELECT json_remove(body,{paths}) FROM records WHERE kind=? ORDER BY rowid DESC",
+                    (*(f'$."{key}"' for key in drop), kind),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # SQLite without JSON support: same result, just slower.
+                rows = connection.execute(query, (kind,)).fetchall()
+        else:
+            rows = connection.execute(query, (kind,)).fetchall()
+    records = [local(json.loads(row[0])) for row in rows]
+    for record in records:
+        for key in drop:
+            record.pop(key, None)
+    return records
 
 
 def count(kind: str):

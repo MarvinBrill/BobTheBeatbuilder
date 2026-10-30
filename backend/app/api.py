@@ -40,10 +40,24 @@ def conditional_state(response: Response, if_none_match: str | None = Header(def
     return state()
 
 
+# Large record fields the UI never reads. Dropped inside SQLite: parsing a dataset's map list
+# alone took seconds per poll, and polls repeat on every progress update of a running job.
+STATE_DROP = {
+    "dataset": ("maps",),
+    "model": (
+        "excluded_maps",
+        "training_song_hashes",
+        "validation_song_hashes",
+        "test_song_hashes",
+    ),
+}
+
+
 def state():
     with jobs.lock:
         deletion_blocked = bool(jobs.events or jobs.uploads)
-    datasets = store.all_records("dataset")
+    datasets = store.all_records("dataset", drop=STATE_DROP["dataset"])
+    models = store.all_records("model", drop=STATE_DROP["model"])
     dataset_ids = {item["id"] for item in datasets}
     return {
         "deletion_blocked": deletion_blocked,
@@ -57,7 +71,7 @@ def state():
                     ),
                 }
             )
-            for item in store.all_records("model")
+            for item in models
             if item.get("architecture") == ARCHITECTURE and item.get("event_schema") == EVENT_SCHEMA
         ],
         # Any model with weights can be a training start point, also older architectures.
@@ -70,7 +84,7 @@ def state():
                 "style_version": item.get("style_version")
                 or (item.get("model_config") or {}).get("style_version", 1),
             }
-            for item in store.all_records("model")
+            for item in models
         ],
         "jobs": store.all_records("job")[:100],
         "outputs": [public(item) for item in store.all_records("output")],
