@@ -46,6 +46,23 @@ def evaluate(model, maps, batch_size, selected_device, context, weight, runtime=
     return meter.value(), {**quality.result(), "loss_terms": meter.values()}
 
 
+def free_score(suite):
+    """Lower is better: free-running quality from the validation rollouts.
+
+    Over/undermapping (|log2 object ratio|), star-chain share above the human level, onset
+    agreement below it and timing detection errors. None without usable results.
+    """
+    means = (suite or {}).get("means") or {}
+    if "object_ratio" not in means:
+        return None
+    score = abs(math.log2(max(means["object_ratio"], 1e-3)))
+    score += 2 * max(0.0, means.get("star_chain_share", 0.0) - 0.1)
+    score += 2 * max(0.0, 0.65 - means.get("onset_hit_share", 0.65))
+    score += 0.5 * max(0.0, means.get("sharp_share", 0.45) - 0.55)
+    score += 10 * min(0.1, means.get("timing_bpm_error", 0.0))
+    return float(score)
+
+
 def train(settings, context):
     selected_device = device(settings["device"])
     settings = {
@@ -60,6 +77,11 @@ def train(settings, context):
         "cuda_graphs": True,
         "context_robustness": False,
         "rollout_validation": True,
+        "onset_weight_power": 0.6,
+        "timing_audit": True,
+        "timing_tolerance_ms": 25.0,
+        "selection_rule": "combined",
+        "turn_head": True,
         **settings,
     }
     source = (
@@ -98,6 +120,29 @@ def train(settings, context):
         item["mapper_name"] = style.resolve_mapper(
             item.get("creator"), item.get("mapper_candidate"), known
         )
+    timing_report = None
+    if settings["timing_audit"]:
+        from .timing_audit import audit_offsets, convention, outliers
+
+        offsets = audit_offsets(prepared, context)
+        timing_report = convention(offsets)
+        # A resumed run drops exactly what its first run dropped (same data, same rule).
+        dropping = not source or bool((source.get("timing_audit") or {}).get("excluded"))
+        if source:
+            settings["timing_tolerance_ms"] = (source.get("settings") or {}).get(
+                "timing_tolerance_ms", settings["timing_tolerance_ms"]
+            )
+        if timing_report and dropping:
+            # Maps far from the dataset's timing convention blur the onset and beat targets.
+            dropped = outliers(offsets, timing_report["median_ms"], settings["timing_tolerance_ms"])
+            if dropped and len(dropped) < 0.25 * len(prepared):
+                issues.extend(
+                    {"map_id": item["map_id"], "reason": "Timing weicht stark vom Datensatz ab"}
+                    for item in prepared
+                    if item["map_id"] in dropped
+                )
+                prepared = [item for item in prepared if item["map_id"] not in dropped]
+                timing_report["excluded"] = len(dropped)
     split = split_maps(prepared, settings["seed"])
     training, validation, test = split
     if not training:
@@ -126,9 +171,14 @@ def train(settings, context):
             ModelConfig.from_dict(base["model_config"]),
             style_version=2,
             mapper_slots=len(vocabulary) + 1,
+            turn_head=bool(settings["turn_head"]),
         )
     else:
-        cfg = replace(configuration(settings["model_size"]), mapper_slots=len(vocabulary) + 1)
+        cfg = replace(
+            configuration(settings["model_size"]),
+            mapper_slots=len(vocabulary) + 1,
+            turn_head=bool(settings["turn_head"]),
+        )
     model = PhraseMapper(cfg).to(selected_device)
     transferred = warm_start(model, base["id"]) if base else None
     runtime = TrainingRuntime(selected_device, settings["precision"])
@@ -139,7 +189,14 @@ def train(settings, context):
         start_epoch, step = state["completed_epochs"], state["optimizer_steps"]
     frame_count = sum(item["labels"][:, 4].sum() for item in training)
     hits = sum(item["labels"][:, 0].sum() for item in training)
-    weight = float(np.clip(frame_count / max(1, 2 * hits) - 1, 1, 40))
+    raw_weight = float(np.clip(frame_count / max(1, 2 * hits) - 1, 1, 40))
+    # The full class-balance weight (~15) made the onset head fire almost everywhere
+    # (precision 0.50 at recall 0.96); a tempered weight trades a little recall for evidence
+    # that separates strong beats from weak positions. Resumed runs keep their weight.
+    power = 1.0 if source else float(settings["onset_weight_power"])
+    weight = float(np.clip(raw_weight**power, 1, 40))
+    if source and source.get("onset_positive_weight"):
+        weight = float(source["onset_positive_weight"])
     identifier = uuid4().hex
     directory = DATA / "models" / identifier
     directory.mkdir()
@@ -179,8 +236,17 @@ def train(settings, context):
     }
     metadata["parameters"] = sum(parameter.numel() for parameter in model.parameters())
     metadata["onset_positive_weight"] = weight
+    metadata["onset_weight_power"] = power
     metadata["training_policy"] = "plateau-context-v1"
-    metadata["selection_rule"] = "minimum_total_validation_loss"
+    metadata["selection_rule"] = (
+        "validation_loss_or_free_generation"
+        if settings["selection_rule"] == "combined"
+        else "minimum_total_validation_loss"
+    )
+    if timing_report:
+        metadata["timing_audit"] = timing_report
+        # Audio-only timing detection adds this to the onset phase (see tempo_grid).
+        metadata["timing_convention_ms"] = -timing_report["median_ms"]
     metrics, best = [], math.inf
     if source:
         metrics = list(source["metrics"])
@@ -350,6 +416,14 @@ def train(settings, context):
                     context,
                     progress=0.15 + 0.8 * (local_epoch + 1) / settings["epochs"],
                 )
+                score = free_score(metric["free_validation"])
+                metric["free_score"] = score
+                previous = metadata.get("free_best")
+                if score is not None and (previous is None or score < previous["score"]):
+                    metadata["free_best"] = {
+                        "epoch": epoch, "score": score, "validation_loss": validation_loss,
+                    }  # fmt: skip
+                    save_weights(model, directory / "model_free.safetensors")
                 checkpoint()
             context.report(
                 0.15 + 0.8 * (local_epoch + 1) / settings["epochs"],
@@ -364,6 +438,24 @@ def train(settings, context):
                 )
                 break
         evaluating_best = True
+        chosen = metadata.get("free_best")
+        if (
+            settings["selection_rule"] == "combined"
+            and chosen
+            and chosen["epoch"] != metadata.get("best_epoch")
+            and (directory / "model_free.safetensors").exists()
+            and math.isfinite(best)
+            and chosen["validation_loss"] <= best + 0.03 * abs(best)
+        ):
+            # Nearly as good on the teacher-forced loss and better in free generation:
+            # the free-running behaviour is what the user gets.
+            shutil.copyfile(directory / "model_free.safetensors", directory / "model.safetensors")
+            metadata["selected_epoch"] = chosen["epoch"]
+            metadata["selection"] = "free_generation"
+        else:
+            metadata["selected_epoch"] = metadata.get("best_epoch")
+            metadata["selection"] = "validation_loss"
+        (directory / "model_free.safetensors").unlink(missing_ok=True)
         model.load_state_dict(load_file(str(directory / "model.safetensors")))
         if test:
             loss, quality = evaluate(

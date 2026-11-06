@@ -89,10 +89,13 @@ def candidate_object(
     fitting = [value * beat for value in DURATION_BEATS if value * beat <= duration + 1e-6]
     duration = max(fitting, default=0)
     slowest, fastest = velocity_band(settings)
-    wanted = target_velocity(settings)
+    wanted = settings.get("section_velocity") or target_velocity(settings)
+    # One velocity per section: every slider is scaled to it, not only the ones outside
+    # the band (in-band sliders kept their own speed: 54-72 different velocities per map).
+    uniform = bool(settings.get("uniform_slider_velocity", True))
     if slider and length > 0 and duration > 0 and wanted is not None:
         velocity = length * repeats * beat / (140 * duration)
-        if not slowest <= velocity <= fastest:
+        if (uniform and abs(velocity / wanted - 1) > 0.01) or not slowest <= velocity <= fastest:
             # Keep the learned shape but scale it to the requested velocity instead of
             # writing a 30 px slider that crawls for a whole beat at 0.2x. One shared
             # velocity also keeps the number of green lines down.

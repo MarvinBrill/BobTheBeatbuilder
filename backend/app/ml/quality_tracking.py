@@ -4,7 +4,7 @@ GROUPS = {
     "rhythm": ("onset", "beat", "density", "tempo"),
     "geometry": ("geometry",),
     "structure": ("kind", "duration", "repeats", "combo"),
-    "movement": ("motion", "flow", "compatibility"),
+    "movement": ("motion", "flow", "compatibility", "turn"),
     "pattern": ("gap",),
 }
 

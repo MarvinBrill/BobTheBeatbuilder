@@ -1,7 +1,7 @@
 import math
 import torch
 from .architecture import GEOMETRY_SIZE
-from .movement import motion_tensor
+from .movement import motion_tensor, turn_targets
 from .context_counterfactuals import counterfactuals
 
 
@@ -111,6 +111,11 @@ def parts(model, output, batch, onset_weight=20):
     if model.config.enable_plan:
         terms["plan"] = term(
             smooth_error(output["plan"] - batch["plan_targets"]), batch["plan_mask"], 0.1
+        )
+    if "turn" in output:
+        turns = turn_targets(batch["motion_target"], batch["motion_context"])
+        terms["turn"] = term(
+            smoothed_categorical(output["turn"], turns), mask * batch["geometry_valid"], 0.2
         )
     if "gap" in output:
         gap_valid = mask * (batch["gap_target"] >= 0).to(mask.dtype)

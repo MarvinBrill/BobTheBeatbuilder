@@ -16,7 +16,8 @@ import { StudioAdvanced, defaultAdvanced } from "./StudioAdvanced";
 import { StudioStyle, defaultTarget, type StyleTarget } from "./StudioStyle";
 import { isStyled, starProfile, typicalSettings } from "./styleControls";
 import { MapPreview } from "../components/MapPreview";
-import type { Device, Hardware, State } from "../types";
+import { SongAnalysis } from "./SongAnalysis";
+import type { Device, Hardware, SongPlan, State } from "../types";
 import { GeneratedMaps } from "./GeneratedMaps";
 import { generationHelp } from "./generationHelp";
 
@@ -71,6 +72,9 @@ export function Studio({
   const [advanced, setAdvanced] = useState(defaultAdvanced);
   const [target, setTarget] = useState<StyleTarget>(defaultTarget);
   const [previewId, setPreviewId] = useState("");
+  // Song analysis (step 02): the reviewed timing and sections generation will use.
+  const [plan, setPlan] = useState<SongPlan | null>(null);
+  const [usePlan, setUsePlan] = useState(true);
   const outputs = state.outputs.filter((output) => output.objects);
   const selectedModel =
     state.models.find((item) => item.id === model)?.id ||
@@ -147,6 +151,7 @@ export function Studio({
         setUploading,
       );
       setAudio(value);
+      setPlan(null);
       setTitle(file.name.replace(/\.[^.]+$/, ""));
     } catch (error) {
       onError((error as Error).message);
@@ -171,6 +176,7 @@ export function Studio({
         target_stars: target.useTarget ? target.stars : null,
         calibrate: target.useTarget && target.calibrate && calculatorReady,
         calibration_rounds: target.rounds,
+        song_plan: styled && usePlan && plan ? plan : null,
         ...(styled
           ? {
               aim_share: target.aimShare,
@@ -305,12 +311,28 @@ export function Studio({
               </select>
             </label>
           </section>
+          {styled && (
+            <SongAnalysis
+              state={state}
+              audio={audio}
+              modelId={selectedModel}
+              device={device}
+              params={{ ar: params.ar, cs: params.cs, od: params.od, hp: params.hp }}
+              targetStars={target.useTarget ? target.stars : null}
+              plan={plan}
+              onPlan={setPlan}
+              usePlan={usePlan}
+              onUsePlan={setUsePlan}
+              onError={onError}
+              refresh={refresh}
+            />
+          )}
           <section className="panel">
             <div className="panel-heading">
               <h2>
                 <Sparkles size={17} /> Dein Mapping-Stil
               </h2>
-              <span className="section-number">02</span>
+              <span className="section-number">{styled ? "03" : "02"}</span>
             </div>
             {styled && (
               <StudioStyle
@@ -467,18 +489,26 @@ export function Studio({
           </section>
         </div>
         <div className="studio-preview">
-          <MapPreview output={selectedOutput} onError={onError} />
+          <MapPreview
+            output={selectedOutput}
+            onError={onError}
+            busy={!!generation || starting}
+            onJob={(job) => {
+              pendingJob.track(job);
+              refresh();
+            }}
+          />
           <div className="workflow-strip" aria-hidden="true">
             <span>
-              <b>01</b> Audio analysieren
+              <b>01</b> Song analysieren
             </span>
             <i />
             <span>
-              <b>02</b> Muster lernen
+              <b>02</b> Plan prüfen
             </span>
             <i />
             <span>
-              <b>03</b> Losspielen
+              <b>03</b> Abschnitte verfeinern
             </span>
           </div>
           <GeneratedMaps

@@ -1,4 +1,14 @@
 export const generationHelp = {
+  variation:
+    "Wie stark ein Rhythmus, der länger als zwei Takte gleich bleibt, gebremst wird. Starke Onsets in der Musik dürfen ihn trotzdem fortsetzen. 0 = aus.",
+  accents:
+    "Die stärksten Onsets jedes Abschnitts (aus der Song-Analyse) sollen eine Note bekommen: Überspringen kostet, Treffen wird belohnt. 0 = aus.",
+  audioOnsets:
+    "Mischt die gelernten Onsets mit der Onset-Stärke des Audios. Das Onset-Modell schlägt fast überall an; das Audio trennt starke Schläge von schwachen Positionen. 0 = nur Modell, 1 = nur Audio.",
+  placement:
+    "Wählt unter fast gleich guten Kandidaten zufällig statt immer den besten. Verhindert, dass sich kleine Vorlieben zu immer gleichen Mustern (z. B. Sternen) aufschaukeln. 0 = immer der beste.",
+  exportOffset:
+    "Verschiebt die Musik gegen die Noten im Export: positiv = Noten kommen später. Für den Fall, dass sich generierte Maps in osu! dauerhaft zu früh oder zu spät anfühlen (lazer: Treffer-Abweichung nach einem Durchlauf prüfen).",
   ar: "Approach Rate (AR): Wie früh Objekte vor ihrem Trefferzeitpunkt erscheinen. Höher bedeutet weniger Vorbereitungszeit. Wird in der Beatmap gespeichert und dem Modell als Stilvorgabe gegeben.",
   cs: "Circle Size (CS): Größe der Trefferkreise. Ein höherer Wert macht die Kreise kleiner und das Zielen anspruchsvoller. Beeinflusst außerdem die Randabstände und Lesbarkeitsprüfung bei der Generierung.",
   od: "Overall Difficulty (OD): Wie genau du den vorgesehenen Zeitpunkt treffen musst. Höher bedeutet engere Zeitfenster für hohe Trefferwertungen. Beeinflusst das Star Rating nur wenig. Der Wert dient zusätzlich als Modellvorgabe.",

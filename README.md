@@ -22,6 +22,9 @@ Beatmaps + audio → curated dataset → train one model → new audio → .osz 
 - **Mapper styles**: guest difficulties are credited to the guest mapper ("NiNo's Insane" in a Sotarks set counts for NiNo); mappers with enough maps get a learned embedding plus a measured style profile.
 - **Pattern controls**: bursts, streams, stream length and spacing, 1/2 jump distance, sharp vs. linear angles, stacks, slider share/velocity/kick sliders, combo length, aim/speed balance. The decoder chooses the rhythm itself on the beat grid, so triples, bursts, streams and 1/2 jump sections are learned as sequences.
 - Generation controls for AR, CS, OD, HP, density, slider preference, spacing, directional flow, variation, and timing.
+- **Song analysis first**: timing (one constant tempo unless the audio clearly changes, round BPM, bar lines) and a song plan (sections on 4-bar phrases with kind, intensity, pattern style, repetitions and accents). Review it in the studio with a metronome, nudge offset/BPM, move or split sections, set a style per section; generation uses exactly that plan.
+- **Section by section**: regenerate one section of a finished map (optionally in another style) or rate it; the rest of the map stays. Ratings and rerolls are stored for later preference training (`GET /api/feedback`).
+- **Map-Check** for every generated map: onset agreement, strongest accents covered, sharp turns and star-jump chains, slider lengths and velocities, grid drift – next to the median of human maps.
 - **Finishing like a mapper would**: kiai on loud sections, preview point, break periods, basic hitsounds (claps on 2 and 4, finishes on drops and kiai, whistles in calm parts) and per-section volume, following the osu! Ranking Criteria and the community hitsounding guide.
 - **RC check** per difficulty tier (Easy … Expert): settings ranges, spinner recovery, overlaps, stream/1-2 chains, distance snap and reading order for new players, snapping, drain time; findings carry editor timestamps and can be copied as modding text.
 - Audio/playfield preview, volume control, and `.osz` export for osu!lazer.
@@ -148,6 +151,10 @@ Prefer diverse songs and consistent mapping standards. Hundreds of different son
 | Epochs | Up to 100; early stopping may finish sooner |
 | Own-position training | Leave the experimental option off initially |
 | Free-generation validation | Enabled |
+| Onset weight power | `0.6` (tempered class balance; `1` = previous behaviour) |
+| Timing audit | On: measures every map's red lines against its audio, stores the dataset's convention with the model and drops maps more than 25 ms off |
+| Checkpoint selection | `combined`: the free-generation best epoch wins when its validation loss is within 3 % |
+| Turn head | On for new models (categorical turn to the next object); older models keep working without it |
 
 A higher learning rate on the large model overfits the onset branch within a few epochs: the rhythm validation loss rises while the training loss keeps falling. Keep all difficulties in the dataset; the star-rating condition separates Easy from Extra.
 
@@ -179,6 +186,7 @@ Generation combines learned predictions with timing selection and playability co
 - Training mainly uses reference object history. Free generation can accumulate errors. The optional own-position objective remains experimental because comparisons showed mixed results.
 - Rhythm selection uses a bounded sequence search and a soft density target. Object planning compares circle/slider structure and geometry together; a weak interior onset can yield to a supported sustained slider, while strong accents remain protected.
 - Timing and geometry guards reject overlaps, extreme movement, loops, sharp hooks, and excessive detours. They can also exclude intentional specialist patterns. Unsuitable sliders can fall back to circles. The movement ceiling is independent of OD.
+- The song plan steers rhythm and movement (`plan_guidance`, `pattern_planner`, `variation`, `accent_weight`, `audio_onsets`, `placement_temperature`, `uniform_slider_velocity`; all on by default): section density and style, accents that should not be skipped, no single gap for more than two bars unless the music insists, repeated sections reuse their rhythm, a movement pattern per bar instead of one repeated turn, one slider velocity per section. `export_offset_ms` shifts the exported audio if maps feel early or late in game. See [generation quality](docs/generation-quality.md).
 - Song-level guidance keeps free generation tied to the requested style (API flags in brackets, all on by default): spacing stays in a band around the requested stream/jump spacing, smaller in quiet parts, with extra jump proposals in varied directions; border hugging and circling the playfield centre cost a little; the slider share is pulled towards the requested ratio, and sliders too slow or too fast are scaled to the requested slider velocity (`movement_guidance`, `slider_guidance`). Melodic onsets (vocals/lead, from a harmonic/percussive split of the audio) add rhythm evidence between the drum hits (`melodic_onsets`, weight 0-1, default 0.6). The audio-only tempo fallback is refined to sub-frame precision.
 - Optional API flags `trace`, `lookahead`, and `motifs` expose decisions or enable bounded experiments. Lookahead and motif memory default to off. Full manual timing sections can preserve meter and bar origin; BPM/offset alone does not establish a downbeat.
 - No claim of ranked-map quality or state-of-the-art performance. Evaluate generated maps on unfamiliar songs through actual gameplay.

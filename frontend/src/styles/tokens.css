@@ -61,6 +61,12 @@
   --color-warning: #f3c27e;
   --color-info: #b7a3ee;
   --color-success-surface: #1f2f2a;
+  /* Song plan sections */
+  --plan-calm: #6f7fc8;
+  --plan-flow: #9c86d8;
+  --plan-build: #d8a26a;
+  --plan-drop: #f6a0c8;
+  --plan-silence: #3a3448;
   /* Lines and panels */
   --border: rgba(204, 191, 231, 0.11);
   --panel: rgba(30, 28, 44, 0.72);

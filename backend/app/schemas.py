@@ -17,6 +17,14 @@ class Selection(BaseModel):
 class TrainRequest(BaseModel):
     context_robustness: bool = False
     rollout_validation: bool = True
+    # Class-balance weight of the onset loss raised to this power (1: the old full weight).
+    onset_weight_power: float = Field(default=0.6, ge=0.2, le=1.0)
+    # Measure every map's red lines against its audio; drop maps far off the dataset median.
+    timing_audit: bool = True
+    timing_tolerance_ms: float = Field(default=25.0, ge=5, le=200)
+    # "combined": prefer the free-generation best epoch when its validation loss is within 3 %.
+    selection_rule: Literal["combined", "validation_loss"] = "combined"
+    turn_head: bool = True
     precision: Literal["auto", "float32", "bfloat16"] = "auto"
     cuda_graphs: bool = True
     model_size: Literal["compact", "standard", "large"] = "standard"
@@ -54,6 +62,58 @@ class ManualTimingPoint(BaseModel):
                     "Bar origin must agree with the red timing point modulo whole measures"
                 )
         return values
+
+
+class SongPlanModel(BaseModel):
+    """A song plan from the studio (see ml/song_plan.py); checked again on use."""
+
+    version: int = 1
+    timing: list[dict] = Field(default_factory=list, max_items=256)
+    sections: list[dict] = Field(default_factory=list, max_items=512)
+    accents: list[float] = Field(default_factory=list, max_items=50000)
+    accent_strength: list[float] = Field(default_factory=list, max_items=50000)
+    timing_source: str = Field(default="plan", max_length=64)
+    timing_info: dict = Field(default_factory=dict)
+    duration_ms: float = Field(default=0, ge=0, le=1300000)
+
+
+class AnalyzeRequest(BaseModel):
+    audio_id: str
+    model_id: Optional[str] = None
+    device: Device = "cpu"
+    ar: float = Field(default=9, ge=0, le=10)
+    cs: float = Field(default=4, ge=0, le=10)
+    od: float = Field(default=8, ge=0, le=10)
+    hp: float = Field(default=5, ge=0, le=10)
+    target_stars: Optional[float] = Field(default=None, ge=0.5, le=12)
+    mapper: Optional[str] = Field(default=None, max_length=100)
+    bpm: Optional[float] = Field(default=None, ge=20, le=400)
+    offset: float = Field(default=0, ge=-10000, le=60000)
+    timing_points: list[ManualTimingPoint] = Field(default_factory=list, max_items=256)
+
+
+PlanStyle = Literal["auto", "calm", "flow", "jumps", "streams", "mixed"]
+
+
+class RegenerateRequest(BaseModel):
+    start_ms: float = Field(ge=0, le=1200000, allow_inf_nan=False)
+    end_ms: float = Field(ge=0, le=1300000, allow_inf_nan=False)
+    seed: int = Field(default=1, ge=0, le=2147483647)
+    style: Optional[PlanStyle] = None
+    device: Optional[Device] = None
+
+    @root_validator(skip_on_failure=True)
+    def ordered(cls, values):
+        if values["end_ms"] <= values["start_ms"]:
+            raise ValueError("The section must end after it starts")
+        return values
+
+
+class FeedbackRequest(BaseModel):
+    start_ms: float = Field(default=0, ge=0, le=1300000)
+    end_ms: float = Field(default=0, ge=0, le=1300000)
+    rating: Literal["good", "bad"]
+    note: str = Field(default="", max_length=500)
 
 
 class GenerateRequest(BaseModel):
@@ -111,6 +171,20 @@ class GenerateRequest(BaseModel):
     # "patterns": the model chooses each next note on the beat grid (style-v2 models).
     # "onsets": all heads are selected from the onset map first; legacy models always do.
     rhythm_mode: Literal["patterns", "onsets"] = "patterns"
+    # Song plan (timing, sections, accents) approved in the studio; it replaces detection.
+    song_plan: Optional[SongPlanModel] = None
+    # Plan-driven guidance (sections, accents, repetition, rhythm variation).
+    plan_guidance: bool = True
+    pattern_planner: bool = True
+    variation: float = Field(default=1.0, ge=0, le=3)
+    accent_weight: float = Field(default=1.0, ge=0, le=3)
+    # Learned onset evidence x the audio's onset strength (0: learned only, 1: audio only).
+    audio_onsets: float = Field(default=0.4, ge=0, le=1)
+    # Sample among near-best placements (0: always the best candidate).
+    placement_temperature: float = Field(default=0.25, ge=0, le=2)
+    uniform_slider_velocity: bool = True
+    # Shifts the exported music against the notes (ms; positive: notes later).
+    export_offset_ms: float = Field(default=0, ge=-200, le=200, allow_inf_nan=False)
 
     @root_validator(skip_on_failure=True)
     def ordered_timing(cls, values):

@@ -193,7 +193,7 @@ def test_generation_persists_requested_trace_outside_export(monkeypatch):
     monkeypatch.setattr(generation, "load_file", lambda path: {})
     monkeypatch.setattr(generation, "features", lambda path: np.zeros((500, 64), np.float32))
     monkeypatch.setattr(
-        generation, "export_audio", lambda source, target: target.write_bytes(b"audio")
+        generation, "export_audio", lambda source, target, *offset: target.write_bytes(b"audio")
     )
     monkeypatch.setattr(
         generation.store,

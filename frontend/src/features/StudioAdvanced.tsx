@@ -22,6 +22,14 @@ export const defaultAdvanced = {
   hitsounds: "basic" as "off" | "basic" | "full",
   kiai: true,
   breaks: true,
+  plan_guidance: true,
+  pattern_planner: true,
+  variation: 1,
+  accent_weight: 1,
+  audio_onsets: 0.4,
+  placement_temperature: 0.25,
+  uniform_slider_velocity: true,
+  export_offset_ms: 0,
 };
 
 export function StudioAdvanced({
@@ -181,6 +189,85 @@ export function StudioAdvanced({
             Spinner vor Drops, in langen hörbaren Lücken und im Outro
           </label>
         )}
+        {styled && value.rhythm_mode === "patterns" && (
+          <>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={value.plan_guidance}
+                onChange={(event) => update({ plan_guidance: event.target.checked })}
+              />{" "}
+              Nach Song-Plan generieren (Abschnitte, Akzente, Wiederholungen)
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={value.pattern_planner}
+                onChange={(event) => update({ pattern_planner: event.target.checked })}
+              />{" "}
+              Bewegungsmuster pro Takt planen (gegen Stern-Sprünge)
+            </label>
+            <div className="field-row">
+              <Slider
+                label="Rhythmus-Abwechslung"
+                help={generationHelp.variation}
+                value={value.variation}
+                min={0}
+                max={3}
+                step={0.25}
+                onChange={(variation) => update({ variation })}
+              />
+              <Slider
+                label="Akzente treffen"
+                help={generationHelp.accents}
+                value={value.accent_weight}
+                min={0}
+                max={3}
+                step={0.25}
+                onChange={(accent_weight) => update({ accent_weight })}
+              />
+            </div>
+            <div className="field-row">
+              <Slider
+                label="Audio-Onsets"
+                help={generationHelp.audioOnsets}
+                value={value.audio_onsets}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(audio_onsets) => update({ audio_onsets })}
+              />
+              <Slider
+                label="Platzierungs-Vielfalt"
+                help={generationHelp.placement}
+                value={value.placement_temperature}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={(placement_temperature) => update({ placement_temperature })}
+              />
+            </div>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={value.uniform_slider_velocity}
+                onChange={(event) => update({ uniform_slider_velocity: event.target.checked })}
+              />{" "}
+              Eine Slider-Geschwindigkeit pro Abschnitt
+            </label>
+          </>
+        )}
+        <label>
+          Audio-Versatz beim Export (ms)
+          <input
+            type="number"
+            min={-200}
+            max={200}
+            value={value.export_offset_ms}
+            onChange={(event) => update({ export_offset_ms: Number(event.target.value) })}
+          />
+          <small>{generationHelp.exportOffset}</small>
+        </label>
         {styled && (
           <label className="checkbox-label">
             <input

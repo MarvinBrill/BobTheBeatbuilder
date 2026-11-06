@@ -1,27 +1,31 @@
 import json
 import logging
 import math
+import tempfile
 import zipfile
+from uuid import uuid4
 from dataclasses import asdict
 from pathlib import Path
 import numpy as np
 import torch
 from safetensors.torch import load_file
 from .. import difficulty, store
-from ..beatmaps import write, parse
+from ..beatmaps import HitObject, write, parse, unify_slider_velocities
 from ..artifacts import artifact_directory
 from ..config import DATA
-from ..timing import TimingPoint, red_points
+from ..timing import red_points
 from .audio import features, export_audio, FRAME_MS
 from .network import conditions, device
 from .phrase_model import create_model
-from .rhythm_inference import predict_rhythm, timing_map
+from .rhythm_inference import detect, predict_rhythm, timing_map
 from .sequence_data import summary_features
 from .sequence_generation import generate_objects, generate_objects_v2
 from .architecture import ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEMA, TARGET_SCHEMA
 from .generation_trace import GenerationTrace, object_snapshot
 from .combos import assign_combos
 from .finishing import finish_map
+from .map_audit import audit
+from .song_plan import SongPlan, build_plan, _plain as plain_json
 from ..ranking_check import ranking_check
 from . import style
 
@@ -125,16 +129,15 @@ def calibration_step(settings, target, stars, attributes, profile, star_range, p
     split can still look aim-heavy. A measured jump spacing far below the requested one
     therefore also pulls the jump lever instead of densifying the rhythm.
 
-    Raising the condition stars and a uniform `tempo_bias` were the only levers before; both
-    push every gap of the song towards 1/4 when the real deficit is aim (tiny spacing), which
-    produced song-long streams. The stars condition now stays near the trained range and the
-    target, `tempo_bias` only changes when speed is the weaker skill, and an aim deficit asks
-    the model for wider jumps instead.
+    Levers: the stars condition (kept within +-0.75 stars of the target and the trained
+    range), the jump spacing for aim, and `density_scale` (the rhythm guide's target
+    density, section by section) for speed. `tempo_bias` used to be the speed lever: it
+    shifted every gap of the song towards 1/4 or 1/1 at once and is now left to the user.
     """
     updated = dict(settings)
     error = target - stars
     low, high = star_range
-    lower, upper = max(low, target - 1.5), min(high, target + 1.5)
+    lower, upper = max(low, target - 0.75), min(high, target + 0.75)
     if lower > upper:  # a target outside the trained range: stay at the nearest edge
         lower = upper = float(np.clip(target, low, high))
     updated["condition_stars"] = float(
@@ -149,21 +152,23 @@ def calibration_step(settings, target, stars, attributes, profile, star_range, p
     lever = "jump_spacing" not in user_style and bool(profile and profile.get("jump_spacing"))
     calibrated = settings.get("calibration_style") or {}
     measured_jump = (patterns or {}).get("jump_spacing")
-    collapsed = bool(
-        lever
-        and measured_jump is not None
-        and measured_jump < 0.75 * calibrated.get("jump_spacing", profile["jump_spacing"])
-    )
+    current = calibrated.get("jump_spacing", (profile or {}).get("jump_spacing"))
+    collapsed = bool(lever and measured_jump is not None and measured_jump < 0.75 * current)
+    density = float(settings.get("density_scale", 1.0))
     if error > 0 and lever and (share < typical_share - 0.05 or collapsed):
         # Aim is missing: wider jumps, never denser rhythm.
-        updated["tempo_bias"] = float(np.clip(min(settings["tempo_bias"], 0.0) - 0.1, -1, 1))
-        current = calibrated.get("jump_spacing", profile["jump_spacing"])
         updated["calibration_style"] = {
             **calibrated,  # the stored setting can be an explicit None
             "jump_spacing": float(np.clip(current * (1 + 0.15 * min(error, 2)), 40, 400)),
         }
+    elif error < 0 and lever and share > typical_share + 0.05:
+        # Too hard because of the jumps: narrower jumps first.
+        updated["calibration_style"] = {
+            **calibrated,
+            "jump_spacing": float(np.clip(current * (1 + 0.1 * max(error, -2)), 40, 400)),
+        }
     else:
-        updated["tempo_bias"] = float(np.clip(settings["tempo_bias"] + 0.25 * error, -1, 1))
+        updated["density_scale"] = float(np.clip(density * 2 ** (0.25 * error), 0.6, 1.6))
     return updated
 
 
@@ -265,30 +270,30 @@ def pattern_summary(objects, settings, timing):
     }
 
 
-def generate(settings, context, trace=None):
-    settings = {
-        "seed": 42,
-        "temperature": 0.8,
-        "candidates": 12,
-        "style": {},
-        "target_stars": None,
-        "aim_share": None,
-        "mapper": None,
-        "calibrate": False,
-        "calibration_rounds": 3,
-        "max_stream": 0,
-        "tempo_bias": 0.0,
-        "rhythm_mode": "patterns",
-        "hitsounds": "basic",
-        "kiai": True,
-        "breaks": True,
-        **settings,
-    }
-    if trace is None and settings.get("trace", False):
-        trace = GenerationTrace()
-    if trace is not None:
-        trace.record("generation_settings", settings=settings)
-    metadata = store.get("model", settings["model_id"])
+DEFAULTS = {
+    "seed": 42,
+    "temperature": 0.8,
+    "candidates": 12,
+    "style": {},
+    "target_stars": None,
+    "aim_share": None,
+    "mapper": None,
+    "calibrate": False,
+    "calibration_rounds": 3,
+    "max_stream": 0,
+    "tempo_bias": 0.0,
+    "rhythm_mode": "patterns",
+    "hitsounds": "basic",
+    "kiai": True,
+    "breaks": True,
+    "density_scale": 1.0,
+    "export_offset_ms": 0.0,
+}
+# Values that are runtime objects and never stored with an output.
+TRANSIENT = ("song_plan_object", "timing_override")
+
+
+def check_model(metadata):
     for field, expected in (
         ("architecture", ARCHITECTURE),
         ("format_version", FORMAT_VERSION),
@@ -300,6 +305,166 @@ def generate(settings, context, trace=None):
                 f"Incompatible model {field}: expected {expected!r}, got {metadata.get(field)!r}. "
                 "Train a new Phrase Mapper model."
             )
+
+
+def load_model(metadata, selected_device):
+    check_model(metadata)
+    model = create_model(metadata["architecture"], metadata.get("model_config"))
+    model.load_state_dict(load_file(str(DATA / "models" / metadata["id"] / "model.safetensors")))
+    return model.to(selected_device).eval()
+
+
+def probe_prediction(model, mel, settings, selected_device, context, mapper):
+    """The rhythm prediction with only the hit-window settings known (tempo unknown)."""
+    values, mask = style.vector({key: settings[key] for key in ("ar", "cs", "od", "hp")})
+    probe = torch.from_numpy(style.condition_input(values, mask))[None].to(selected_device)
+    return predict_rhythm(model, mel, summary_features(mel), probe, selected_device, context, mapper)
+
+
+def song_plan_for(settings, mel, prediction, audio_path):
+    """(SongPlan, timing source, detection info) for a song.
+
+    Order: an approved plan from the studio, manual timing (BPM/offset or sections), then
+    detection from the audio and the model's beat activation.
+    """
+    if settings.get("song_plan"):
+        plan = SongPlan.from_dict(settings["song_plan"])
+        if plan.timing:
+            return plan, "approved-plan", plan.timing_info
+        # Sections without timing: detect the timing, keep the user's sections.
+        result = detect(prediction, mel, settings)
+        if result is None:
+            raise ValueError("Kein stabiler Beat gefunden. Bitte BPM und Offset angeben.")
+        plan.timing, plan.timing_source, plan.timing_info = result.points, result.source, result.info
+        return plan, result.source, result.info
+    if settings.get("bpm") or settings.get("timing_points"):
+        timing, source = timing_map(prediction, audio_path, settings, mel)
+        return build_plan(mel, FRAME_MS, timing, source), source, {}
+    result = detect(prediction, mel, settings)
+    if result is not None:
+        plan = build_plan(mel, FRAME_MS, result.points, result.source, result.info)
+        return plan, result.source, result.info
+    timing, source = timing_map(prediction, audio_path, settings, mel)
+    return build_plan(mel, FRAME_MS, timing, source), source, {}
+
+
+def audit_reference(metadata, stars):
+    """Typical audit values of the training maps at these stars (when measured)."""
+    profiles = metadata.get("audit_profiles") or {}
+    if stars is None or not profiles:
+        return None
+    bucket = min(profiles, key=lambda key: abs(float(key) - float(stars)))
+    return profiles[bucket]
+
+
+def storable(settings):
+    return {key: value for key, value in settings.items() if key not in TRANSIENT}
+
+
+def publish_output(
+    objects, timing, spinners, report, attributes, settings, mel, audio_path, metadata,
+    history=None, trace=None, parent=None,
+):  # fmt: skip
+    """Finish, export, measure and store one generated map; returns the output id."""
+    duration_ms = len(mel) * FRAME_MS
+    plan = report.pop("song_plan", None)
+    with artifact_directory("outputs") as (identifier, directory):
+        audio_name = "audio.ogg"
+        unify_slider_velocities(objects)
+        export_audio(audio_path, directory / audio_name, settings.get("export_offset_ms", 0.0))
+        # Editor layers the model does not learn: kiai, preview point, breaks, hitsounds.
+        finish = finish_map(objects, timing, spinners, mel, settings)
+        bpm, offset = verified_write(
+            directory / "map.osu", objects, settings, audio_name, timing, trace, spinners, finish
+        )
+        if attributes is None:
+            attributes = measured_stars(directory / "map.osu")
+        report["difficulty"] = attributes
+        if history is not None:
+            report["calibration"] = history
+        report["patterns"] = pattern_summary(objects, settings, timing)
+        report["finishing"] = finish.summary
+        report["audit"] = plain_json(
+            audit(
+                objects, timing, mel, FRAME_MS, settings["cs"],
+                audit_reference(
+                    metadata, attributes["star_rating"] if attributes else settings.get("target_stars")
+                ),
+            )
+        )  # fmt: skip
+        if plan is not None:
+            report["song_plan"] = plan.to_dict() if isinstance(plan, SongPlan) else plan
+        report["ranking_check"] = ranking_check(
+            objects,
+            spinners,
+            timing,
+            settings,
+            stars=attributes["star_rating"] if attributes else settings.get("target_stars"),
+            audio_ms=duration_ms,
+            finish=finish,
+        )
+        with zipfile.ZipFile(directory / "beatmap.osz", "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(directory / "map.osu", "map.osu")
+            archive.write(directory / audio_name, audio_name)
+        preview = {
+            "objects": [asdict(obj) for obj in objects],
+            "spinners": [[float(start), float(end)] for start, end in spinners],
+            "kiai": [[float(start), float(end)] for start, end in finish.kiai],
+            "breaks": [[float(start), float(end)] for start, end in finish.breaks],
+            "duration": len(mel) * FRAME_MS / 1000,
+            "bpm": bpm,
+            "offset": offset,
+            "timing": [asdict(point) for point in timing],
+            "quality": report,
+            "cs": settings["cs"],
+            "ar": settings["ar"],
+            "waveform": np.max(mel[:: max(1, len(mel) // 180)], axis=1).tolist(),
+        }
+        (directory / "preview.json").write_text(
+            json.dumps(preview, allow_nan=False), encoding="utf-8"
+        )
+        if trace is not None:
+            (directory / "trace.json").write_text(
+                json.dumps(trace.document(), allow_nan=False), encoding="utf-8"
+            )
+        stored = storable(settings)
+        if plan is not None:
+            stored["song_plan"] = report["song_plan"]
+        store.save(
+            "output",
+            {
+                "id": identifier,
+                "name": f"{settings['title']}.osz",
+                "path": str(directory / "beatmap.osz"),
+                "audio_path": str(directory / audio_name),
+                "preview_path": str(directory / "preview.json"),
+                "objects": len(objects),
+                "bpm": round(bpm, 2),
+                "stars": round(attributes["star_rating"], 2) if attributes else None,
+                "aim": round(attributes["aim_difficulty"], 2)
+                if attributes and "aim_difficulty" in attributes
+                else None,
+                "speed": round(attributes["speed_difficulty"], 2)
+                if attributes and "speed_difficulty" in attributes
+                else None,
+                "target_stars": settings.get("target_stars"),
+                "quality": report,
+                "settings": stored,
+                "parent_id": parent,
+                "created_at": store.now(),
+            },
+        )
+        return identifier
+
+
+def generate(settings, context, trace=None):
+    settings = {**DEFAULTS, **settings}
+    if trace is None and settings.get("trace", False):
+        trace = GenerationTrace()
+    if trace is not None:
+        trace.record("generation_settings", settings=storable(settings))
+    metadata = store.get("model", settings["model_id"])
+    check_model(metadata)
     selected_device = device(settings["device"])
     model = create_model(metadata["architecture"], metadata.get("model_config"))
     if metadata.get("trained_slider_geometry") == 0:
@@ -312,6 +477,8 @@ def generate(settings, context, trace=None):
     styled = model.styled
     duration_ms = len(mel) * FRAME_MS
     mapper, known_timing = None, {}
+    if metadata.get("timing_convention_ms") is not None:
+        settings.setdefault("timing_convention_ms", metadata["timing_convention_ms"])
     if styled:
         settings["mapper_index"] = mapper_index(metadata, settings.get("mapper"))
         mapper = torch.tensor([float(settings["mapper_index"])], device=selected_device)
@@ -329,18 +496,17 @@ def generate(settings, context, trace=None):
         if profile and profile.get("tempo") and settings.get("tempo_prior") is None:
             # Typical tempo of training maps at this difficulty: resolves 99 vs 199 BPM.
             settings["tempo_prior"] = float(profile["tempo"])
-        if not settings.get("bpm") and not settings.get("timing_points"):
-            # Tempo is part of the condition; find the timing once with tempo unknown.
-            context.report(0.03, "Tempo bestimmen")
-            values, mask = style.vector({key: settings[key] for key in ("ar", "cs", "od", "hp")})
-            probe = torch.from_numpy(style.condition_input(values, mask))[None].to(selected_device)
-            prediction = predict_rhythm(
-                model, mel, summary_features(mel), probe, selected_device, context, mapper
-            )
-            timing, source = timing_map(prediction, audio_path, settings)
-            known_timing = {"timing_override": timing, "timing_source": source}
+        # Song analysis first: timing and sections, decided once for every round.
+        context.report(0.03, "Tempo und Songstruktur bestimmen")
+        prediction = probe_prediction(model, mel, settings, selected_device, context, mapper)
+        plan, source, timing_info = song_plan_for(settings, mel, prediction, audio_path)
+        known_timing = {"timing_override": plan.timing, "timing_source": source}
+        settings["song_plan_object"] = plan
+        if trace is not None:
+            trace.record("song_plan", plan=plan.to_dict())
     else:
         settings["rhythm_mode"] = "onsets"
+        timing_info = {}
     target = settings["target_stars"]
     rounds = (
         max(1, min(5, int(settings["calibration_rounds"])))
@@ -348,23 +514,16 @@ def generate(settings, context, trace=None):
         else 1
     )
     history, best = [], None
-    with artifact_directory("outputs") as (identifier, directory):
+    (DATA / "tmp").mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="generate-", dir=DATA / "tmp") as folder:
+        scratch = Path(folder)
         audio_name = "audio.ogg"
         for attempt in range(rounds):
             if trace is not None and rounds > 1:
-                trace.record("calibration_round", round=attempt + 1, settings=settings)
+                trace.record("calibration_round", round=attempt + 1, settings=storable(settings))
             run_settings = {**settings, **known_timing}
             if styled:
-                if settings.get("bpm"):
-                    tempo = settings["bpm"]
-                elif known_timing:
-                    tempo = dominant_tempo(known_timing["timing_override"], duration_ms)
-                else:
-                    manual = [
-                        TimingPoint(point["time"], point["beat_length"])
-                        for point in settings["timing_points"]
-                    ]
-                    tempo = dominant_tempo(manual, duration_ms)
+                tempo = dominant_tempo(known_timing["timing_override"], duration_ms)
                 condition = torch.from_numpy(styled_condition(settings, tempo))[None].to(
                     selected_device
                 )
@@ -398,7 +557,8 @@ def generate(settings, context, trace=None):
             if settings.get("combos", True):
                 assign_combos(objects, timing, report.get("spinners") or [], settings)
             spinners = mark_spinner_combos(objects, report.get("spinners") or [])
-            candidate = directory / "candidate.osu"
+            unify_slider_velocities(objects)
+            candidate = scratch / "candidate.osu"
             verified_write(candidate, objects, settings, audio_name, timing, spinners=spinners)
             attributes = measured_stars(candidate)
             stars = attributes["star_rating"] if attributes else None
@@ -410,13 +570,14 @@ def generate(settings, context, trace=None):
                     "speed": attributes.get("speed_difficulty") if attributes else None,
                     "condition_stars": settings.get("condition_stars"),
                     "tempo_bias": settings.get("tempo_bias"),
+                    "density_scale": settings.get("density_scale"),
                     "density": None if styled else settings.get("density"),
                     "objects": len(objects),
                 }
             )
             error = abs(stars - target) if stars is not None and target is not None else 0
             if best is None or error < best[0]:
-                best = (error, objects, timing, report, attributes, spinners)
+                best = (error, objects, timing, report, attributes, spinners, dict(settings))
             if stars is None or target is None or error <= STAR_TOLERANCE or attempt + 1 == rounds:
                 break
             context.report(0.9, f"Sterne {stars:.2f} statt {target:.2f} · neuer Durchlauf")
@@ -434,75 +595,105 @@ def generate(settings, context, trace=None):
             else:
                 settings["density"] = float(np.clip(settings["density"] * ratio**0.8, 0.5, 10))
                 settings["spacing"] = float(np.clip(settings["spacing"] * ratio**0.5, 0, 1))
-        _, objects, timing, report, attributes, spinners = best
-        candidate.unlink(missing_ok=True)
-        export_audio(audio_path, directory / audio_name)
-        # Editor layers the model does not learn: kiai, preview point, breaks, hitsounds.
-        finish = finish_map(objects, timing, spinners, mel, settings)
-        bpm, offset = verified_write(
-            directory / "map.osu", objects, settings, audio_name, timing, trace, spinners, finish
-        )
-        if known_timing:
-            report["timing_source"] = known_timing["timing_source"]
-        report["difficulty"] = attributes
-        report["calibration"] = history
-        report["patterns"] = pattern_summary(objects, settings, timing)
-        report["finishing"] = finish.summary
-        report["ranking_check"] = ranking_check(
-            objects,
-            spinners,
-            timing,
-            settings,
-            stars=attributes["star_rating"] if attributes else target,
-            audio_ms=duration_ms,
-            finish=finish,
-        )
-        with zipfile.ZipFile(directory / "beatmap.osz", "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.write(directory / "map.osu", "map.osu")
-            archive.write(directory / audio_name, audio_name)
-        preview = {
-            "objects": [asdict(obj) for obj in objects],
-            "spinners": [[float(start), float(end)] for start, end in spinners],
-            "kiai": [[float(start), float(end)] for start, end in finish.kiai],
-            "breaks": [[float(start), float(end)] for start, end in finish.breaks],
-            "duration": len(mel) * FRAME_MS / 1000,
-            "bpm": bpm,
-            "offset": offset,
-            "timing": [asdict(point) for point in timing],
-            "quality": report,
-            "cs": settings["cs"],
-            "ar": settings["ar"],
-            "waveform": np.max(mel[:: max(1, len(mel) // 180)], axis=1).tolist(),
-        }
-        (directory / "preview.json").write_text(
-            json.dumps(preview, allow_nan=False), encoding="utf-8"
-        )
-        if trace is not None:
-            (directory / "trace.json").write_text(
-                json.dumps(trace.document(), allow_nan=False), encoding="utf-8"
-            )
-        context.check()
-        store.save(
-            "output",
-            {
-                "id": identifier,
-                "name": f"{settings['title']}.osz",
-                "path": str(directory / "beatmap.osz"),
-                "audio_path": str(directory / audio_name),
-                "preview_path": str(directory / "preview.json"),
-                "objects": len(objects),
-                "bpm": round(bpm, 2),
-                "stars": round(attributes["star_rating"], 2) if attributes else None,
-                "aim": round(attributes["aim_difficulty"], 2)
-                if attributes and "aim_difficulty" in attributes
-                else None,
-                "speed": round(attributes["speed_difficulty"], 2)
-                if attributes and "speed_difficulty" in attributes
-                else None,
-                "target_stars": target,
-                "quality": report,
-                "settings": settings,
-                "created_at": store.now(),
-            },
-        )
-        return {"output_id": identifier}
+        _, objects, timing, report, attributes, spinners, chosen_settings = best
+    if known_timing:
+        report["timing_source"] = known_timing["timing_source"]
+    if timing_info:
+        report["timing_detection"] = plain_json(timing_info)
+    context.check()
+    identifier = publish_output(
+        objects, timing, spinners, report, attributes, chosen_settings, mel, audio_path,
+        metadata, history=history, trace=trace,
+    )  # fmt: skip
+    return {"output_id": identifier}
+
+
+def regenerate_section(request, context):
+    """Generate one span of an existing output again and store the result as a new version.
+
+    Objects before the span are the decoder history, objects after it stay as they are.
+    """
+    output = store.get("output", request["output_id"])
+    settings = {**DEFAULTS, **output["settings"], "seed": int(request.get("seed", 1))}
+    metadata = store.get("model", settings["model_id"])
+    selected_device = device(request.get("device") or settings["device"])
+    model = load_model(metadata, selected_device)
+    if not model.styled:
+        raise ValueError("Abschnitte neu generieren braucht ein Modell mit Stil-Steuerung.")
+    audio_path = Path(store.get("audio", settings["audio_id"])["path"])
+    context.report(0.05, "Audio laden")
+    mel = features(audio_path)
+    preview = json.loads(Path(output["preview_path"]).read_text(encoding="utf-8"))
+    fields = HitObject.__dataclass_fields__
+    objects = [HitObject(**{k: v for k, v in item.items() if k in fields}) for item in preview["objects"]]
+    start, end = float(request["start_ms"]), float(request["end_ms"])
+    if not 0 <= start < end:
+        raise ValueError("Ungültiger Abschnitt")
+    plan = SongPlan.from_dict(settings["song_plan"]) if settings.get("song_plan") else None
+    if request.get("style") and plan is not None:
+        for section in plan.sections:
+            if section.start_ms < end and section.end_ms > start:
+                section.style = request["style"]
+        settings["song_plan"] = plan.to_dict()
+    if plan is None or not plan.timing:
+        raise ValueError("Diese Map hat keinen gespeicherten Song-Plan; bitte neu generieren.")
+    before = [obj for obj in objects if obj.time + obj.duration < start - 1]
+    after = [obj for obj in objects if obj.time >= end]
+    spinners = [tuple(span) for span in preview.get("spinners") or [] if span[1] < start or span[0] >= end]
+    hard_end = after[0].time if after else None
+    for span in spinners:
+        if span[0] >= start and (hard_end is None or span[0] < hard_end):
+            hard_end = span[0]
+    # A kept spinner just before the span: the new objects start after its recovery.
+    previous_end = before[-1].time + before[-1].duration if before else 0.0
+    for left, right in spinners:
+        if previous_end <= right <= start:
+            start = max(start, right + 300.0)
+    if start >= end:
+        raise ValueError("Der Abschnitt liegt vollständig in einem Spinner.")
+    settings["song_plan_object"] = plan
+    run_settings = {**settings, "timing_override": plan.timing, "timing_source": "approved-plan"}
+    mapper = torch.tensor([float(settings.get("mapper_index", 0))], device=selected_device)
+    tempo = dominant_tempo(plan.timing, len(mel) * FRAME_MS)
+    condition = torch.from_numpy(styled_condition(settings, tempo))[None].to(selected_device)
+    generated, timing, report = generate_objects_v2(
+        model, mel, audio_path, run_settings, condition, selected_device, context,
+        mapper=mapper, evaluation_range=(start, min(end, (len(mel) - 1) * FRAME_MS)),
+        initial_objects=before, hard_end=hard_end, plan=plan,
+    )  # fmt: skip
+    merged = before + generated + after
+    if settings.get("combos", True):
+        assign_combos(merged, timing, spinners, settings)
+    spinners = mark_spinner_combos(merged, spinners)
+    full = quality_report_for(merged, settings, report)
+    full["regenerated"] = {"start_ms": start, "end_ms": end, "objects": len(generated), "seed": settings["seed"]}
+    full["song_plan"] = plan
+    store.save(
+        "feedback",
+        {
+            "id": uuid4().hex,
+            "output_id": output["id"],
+            "action": "regenerate",
+            "start_ms": start,
+            "end_ms": end,
+            "objects_before": sum(start <= obj.time < end for obj in objects),
+            "created_at": store.now(),
+        },
+    )
+    context.check()
+    identifier = publish_output(
+        merged, timing, spinners, full, None, settings, mel, audio_path, metadata,
+        parent=output["id"],
+    )  # fmt: skip
+    return {"output_id": identifier}
+
+
+def quality_report_for(objects, settings, report):
+    from .playability import quality_report
+
+    result = quality_report(objects, settings)
+    for key in ("timing_source", "timing_sections", "rhythm", "plan_guidance"):
+        if key in report:
+            result[key] = report[key]
+    result["heavily_repaired_fraction"] = report.get("heavily_repaired_fraction", 0.0)
+    return result

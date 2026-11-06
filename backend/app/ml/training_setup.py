@@ -9,10 +9,14 @@ from .architecture import ModelConfig, ARCHITECTURE, FORMAT_VERSION, EVENT_SCHEM
 def configuration(size):
     """New models always use the style-v2 conditioning (stars, patterns, mapper)."""
     if size == "compact":
-        return ModelConfig(width=128, heads=4, audio_layers=4, decoder_layers=3, style_version=2)
+        return ModelConfig(
+            width=128, heads=4, audio_layers=4, decoder_layers=3, style_version=2, turn_head=True
+        )
     if size == "large":
-        return ModelConfig(width=384, heads=8, audio_layers=8, decoder_layers=6, style_version=2)
-    return ModelConfig(style_version=2)
+        return ModelConfig(
+            width=384, heads=8, audio_layers=8, decoder_layers=6, style_version=2, turn_head=True
+        )
+    return ModelConfig(style_version=2, turn_head=True)
 
 
 def split_maps(prepared, seed):

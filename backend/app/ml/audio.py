@@ -120,8 +120,20 @@ def tempo(path, prior_bpm=None):
     return value, first % (60000 / value)
 
 
-def export_audio(source, destination):
-    """Use a portable osu!/browser audio format even for AAC/M4A inputs."""
+def export_audio(source, destination, offset_ms=0.0):
+    """Use a portable osu!/browser audio format even for AAC/M4A inputs.
+
+    `offset_ms` shifts the music against the map: positive values make the notes later
+    relative to the music (the start of the audio is trimmed), negative values earlier
+    (silence is prepended). Object times in the map are not changed.
+    """
+    offset_ms = float(offset_ms or 0.0)
+    shift = []
+    if offset_ms > 0:
+        shift = ["-af", f"atrim=start={offset_ms / 1000:.4f},asetpts=PTS-STARTPTS"]
+    elif offset_ms < 0:
+        delay = int(round(-offset_ms))
+        shift = ["-af", f"adelay={delay}:all=1"]
     result = subprocess.run(
         [
             "ffmpeg",
@@ -135,6 +147,7 @@ def export_audio(source, destination):
             "-vn",
             "-map_metadata",
             "-1",
+            *shift,
             "-c:a",
             "libvorbis",
             "-q:a",

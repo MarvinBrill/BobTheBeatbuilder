@@ -2,6 +2,35 @@ import numpy as np
 from functools import lru_cache
 
 SCALE = (512.0, 384.0)
+# Turn classes: twelve 30-degree bins of the signed turn from the previous movement, plus
+# one class for "no turn" (either move shorter than TURN_MIN_PIXELS: stack, stream, start).
+TURN_BINS = 12
+TURN_CLASSES = TURN_BINS + 1
+TURN_MIN_PIXELS = 30.0
+
+
+def turn_class(first, second, minimum=TURN_MIN_PIXELS):
+    """Turn class of movement `second` after movement `first` (pixel vectors)."""
+    first, second = np.asarray(first, np.float64), np.asarray(second, np.float64)
+    if np.linalg.norm(first) <= minimum or np.linalg.norm(second) <= minimum:
+        return TURN_BINS
+    cross = first[0] * second[1] - first[1] * second[0]
+    angle = np.degrees(np.arctan2(cross, first @ second))
+    return int(np.clip((angle + 180) // (360 / TURN_BINS), 0, TURN_BINS - 1))
+
+
+def turn_targets(motion_target, motion_context):
+    """Turn classes from prepared motion targets (torch): cos/sin are channels 2/3, the
+    distance channel 0 (/512) and the previous distance channel 7 of the context (/512)."""
+    import torch
+
+    # Float class indices (like the gap targets): every backend, DirectML included.
+    distance = motion_target[..., 0] * 512
+    previous = motion_context[..., 7] * 512
+    angle = torch.atan2(motion_target[..., 3], motion_target[..., 2]) * (180 / 3.141592653589793)
+    bins = torch.clamp(torch.floor((angle + 180) / (360 / TURN_BINS)), 0, TURN_BINS - 1)
+    none = (distance <= TURN_MIN_PIXELS) | (previous <= TURN_MIN_PIXELS)
+    return torch.where(none, torch.full_like(bins, float(TURN_BINS)), bins)
 
 
 def bezier_points(geometry, steps=17):

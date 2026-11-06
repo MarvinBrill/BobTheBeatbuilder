@@ -11,6 +11,7 @@ from ..config import DATA
 from .audio import FRAME_MS
 from .sequence_generation import generate_objects, generate_objects_v2
 from .phrase_metrics import onset_matches
+from .map_audit import movement_audit, rhythm_audit
 from .rollout_sections import (
     section_plan,
     MAX_SECTION_OBJECTS,
@@ -192,8 +193,63 @@ def evaluate_rollout(
         ),
         **roundtrip_report(objects, timing, settings),
     )
+    # The checks a mapper would do first (see map_audit): star chains, onset agreement.
+    measured = {**movement_audit(objects, settings.get("cs", 4)), **rhythm_audit(objects, item["mel"], FRAME_MS)}
+    for key in ("star_chain_share", "sharp_share", "onset_hit_share", "strong_onset_coverage"):
+        value = measured.get(key)
+        if value is not None:
+            diagnostics[key] = float(value)
+    diagnostics.pop("song_plan", None)
     diagnostics["seconds"] = time.perf_counter() - started
     return diagnostics
+
+
+def timing_check(model, item, selected_device, context, progress=0.97):
+    """Detected timing (no reference) against the reference red lines of one song."""
+    from .rhythm_inference import detect, predict_rhythm
+    from .sequence_data import summary_features
+    from ..timing import red_points
+
+    points = red_points(item.get("timing") or [])
+    if not points or not getattr(model, "styled", False):
+        return None
+    condition = torch.from_numpy(style.condition_input(item["style"], item["style_mask"]))[None]
+    mapper = torch.tensor([float(item.get("mapper", 0))], device=selected_device)
+    prediction = predict_rhythm(
+        model, item["mel"], summary_features(item["mel"]), condition.to(selected_device),
+        selected_device, RolloutProgress(context, progress), mapper,
+    )  # fmt: skip
+    result = detect(prediction, item["mel"], {})
+    if result is None:
+        return {"map_id": item["map_id"], "detected": False}
+    duration = len(item["mel"]) * FRAME_MS
+    spans = [
+        ((points[i + 1].time if i + 1 < len(points) else duration) - max(0.0, point.time), point)
+        for i, point in enumerate(points)
+    ]
+    reference = max(spans, key=lambda span: span[0])[1]
+    found = result.points
+    detected = max(
+        (
+            ((found[i + 1].time if i + 1 < len(found) else duration) - max(0.0, point.time), point)
+            for i, point in enumerate(found)
+        ),
+        key=lambda span: span[0],
+    )[1]
+    ratio = reference.beat_length / detected.beat_length
+    octave = min(abs(ratio - value) for value in (0.5, 2.0)) < 0.02
+    error = abs(ratio - 1)
+    beat = reference.beat_length
+    shift = ((detected.time - reference.time) % beat + beat / 2) % beat - beat / 2
+    return {
+        "map_id": item["map_id"],
+        "detected": True,
+        "reference_bpm": 60000 / beat,
+        "detected_bpm": 60000 / detected.beat_length,
+        "timing_bpm_error": float(min(error, 1.0)),
+        "timing_octave_error": bool(octave),
+        "timing_offset_ms": float(abs(shift)) if error < 0.002 else None,
+    }
 
 
 def rollout_songs(maps, limit=3):
@@ -237,6 +293,15 @@ def evaluate_suite(model, maps, selected_device, context, progress=0.97, include
             )
         except ValueError as error:
             failures.append(dict(map_id=item["map_id"], section=section, reason=str(error)))
+    timing_results = []
+    for item in chosen:
+        context.check()
+        try:
+            checked = timing_check(model, item, selected_device, context, progress)
+        except ValueError as error:
+            checked = {"map_id": item["map_id"], "detected": False, "reason": str(error)}
+        if checked is not None:
+            timing_results.append(checked)
     keys = (
         "reference_onset_f1",
         "heavily_repaired_fraction",
@@ -247,7 +312,24 @@ def evaluate_suite(model, maps, selected_device, context, progress=0.97, include
         "aim_speed_p95",
         "object_ratio",
         "longest_short_run",
+        "star_chain_share",
+        "sharp_share",
+        "onset_hit_share",
+        "strong_onset_coverage",
     )
+    means = {}
+    for key in keys:
+        values = [result[key] for result in results if result.get(key) is not None]
+        if values:
+            means[key] = float(np.mean(values))
+    detected = [entry for entry in timing_results if entry.get("detected")]
+    if timing_results:
+        # A song whose timing was not found at all counts as a full error.
+        errors = [entry["timing_bpm_error"] if entry.get("detected") else 1.0 for entry in timing_results]
+        means["timing_bpm_error"] = float(np.mean(errors))
+        offsets = [entry["timing_offset_ms"] for entry in detected if entry.get("timing_offset_ms") is not None]
+        if offsets:
+            means["timing_offset_ms"] = float(np.mean(offsets))
     return {
         "report_schema": REPORT_SCHEMA,
         "songs": len({result["song"] for result in results}),
@@ -255,15 +337,12 @@ def evaluate_suite(model, maps, selected_device, context, progress=0.97, include
         "sections": len(results),
         "max_objects_per_section": MAX_SECTION_OBJECTS,
         "max_objects_full_song": MAX_FULL_OBJECTS if include_full_song else None,
-        "means": (
-            {key: float(np.mean([result[key] for result in results])) for key in keys}
-            if results
-            else {}
-        ),
+        "means": means if results else {},
         "results": results,
+        "timing": timing_results,
         "failures": failures,
         "full_song_skip_reason": (
             "No selected song within 300 seconds" if include_full_song and not eligible else None
         ),
-        "note": "Fixed audio probes include window transitions; activity does not identify a chorus. Truncation is reported. Reference agreement is not a human quality rating; not used for checkpoint selection.",
+        "note": "Fixed audio probes include window transitions; activity does not identify a chorus. Truncation is reported. Reference agreement is not a human quality rating. Object ratio, star chains, onset agreement and timing detection feed the free-generation checkpoint score.",
     }

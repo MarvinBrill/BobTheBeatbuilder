@@ -13,6 +13,9 @@ from .playability import candidate_object, low_difficulty_cost, readability_cost
 from .slider_geometry import geometry_candidates
 
 
+LIKELIHOOD_FLOOR = -6.0  # per dimension, weighted 0.15 in the score
+
+
 @dataclass
 class Candidate:
     obj: object
@@ -36,14 +39,52 @@ def movement_cost(motion, expected, spacing=True):
     Without a previous object (`spacing=False`) the distance feature is measured from the
     playfield centre, so the log-spacing comparison would only pull the song's first object
     towards a meaningless reference and outweigh its structure evidence.
+
+    The expected direction is still a conditional mean: a model torn between a left and a
+    right turn predicts "straight back" (cos -0.8, sin 0) with high apparent certainty, which
+    rewarded sharp turns on every object and fed the star-jump loop. Direction therefore
+    counts with the squared certainty and less than before; the movement guide's pattern
+    planner (and, for new models, the turn-class head) decides the turn instead.
     """
     motion, expected = np.asarray(motion, np.float64), np.asarray(expected, np.float64)
     deviation = np.minimum(np.abs(motion - expected), 5)
     certainty = float(np.clip(np.hypot(expected[2], expected[3]), 0, 1))
-    weights = np.array([1, 1, certainty, certainty, 1, 1, 1, 1], np.float64)
+    direction = 0.6 * certainty**2
+    weights = np.array([1, 1, direction, direction, 1, 1, 1, 1], np.float64)
     distance, wanted = max(0.0, motion[0] * 512), max(0.0, expected[0] * 512)
     gap = abs(math.log((distance + 16) / (wanted + 16))) if spacing else 0.0
     return float((deviation * weights).sum() / len(weights) + 0.5 * gap)
+
+
+def turn_log_probability(probabilities_, obj, history, cs):
+    """Log probability of the candidate's turn class under the turn head (new models)."""
+    if probabilities_ is None:
+        return 0.0
+    from .movement import turn_class
+
+    if len(history) < 2:
+        return 0.0
+    previous, older = history[-1], history[-2]
+    first = (previous.x - older.end_x, previous.y - older.end_y)
+    second = (obj.x - previous.end_x, obj.y - previous.end_y)
+    label = turn_class(first, second)
+    return float(np.log(max(probabilities_[label], 1e-6)) + np.log(len(probabilities_)))
+
+
+def pick_candidate(ranked, rng, temperature=0.25, window=1.5):
+    """Sample among the near-best candidates instead of always taking the top one.
+
+    Always taking the maximum turns every small preference into a repeated pattern; a little
+    temperature among candidates within `window` of the best keeps the choice varied
+    without accepting clearly worse objects. Temperature 0 keeps the old argmax.
+    """
+    if not ranked or temperature <= 0 or len(ranked) == 1:
+        return ranked[0]
+    best = ranked[0].score
+    near = [item for item in ranked if item.score >= best - window]
+    scores = np.array([item.score for item in near], np.float64)
+    weights = np.exp((scores - scores.max()) / temperature)
+    return near[int(rng.choice(len(near), p=weights / weights.sum()))]
 
 
 def probabilities(logits, temperature=1):
@@ -119,6 +160,13 @@ def rank_candidates(
         kind, durations, repeats, next_time - time - 35, beat, settings["slider_bias"]
     )
     count = max(1, settings.get("candidates", 12))
+    if guide is not None and getattr(guide, "velocity_at", None) is not None:
+        velocity = guide.velocity_at(time)
+        if velocity is not None:
+            settings = {**settings, "section_velocity": velocity}
+    turn_probabilities = None
+    if "turn" in output:
+        turn_probabilities = probabilities(output["turn"][0, -1].float().cpu().numpy())
     candidates = []
     geometry_count = math.ceil(count / max(1, len(structures)))
     # Every sampled shape is a whole-curve transform, shared by its structural alternatives.
@@ -184,6 +232,9 @@ def rank_candidates(
             ).sum(-1)
             maximum = components.max()
             likelihood = (maximum + np.log(np.exp(components - maximum).sum())) / dimensions
+            # A very confident mixture would veto every guided proposal outright; capped,
+            # the geometry density stays one strong opinion among the other terms.
+            likelihood = max(likelihood, LIKELIHOOD_FLOOR)
             # Score the final type when a proposed short slider fell back to a circle.
             final_structure = (obj.slider, duration_index, repeat_index)
             structural, kind_log, duration_log, repeat_log = structure_score(
@@ -194,9 +245,11 @@ def rank_candidates(
             beginner = low_difficulty_cost(obj, objects, beat, settings)
             motif_cost = motif_memory.cost(obj, objects) if motif_memory is not None else 0.0
             guidance = guide.cost(obj, objects, beat) if guide is not None else 0.0
+            turn_score = turn_log_probability(turn_probabilities, obj, objects, settings["cs"])
             score = (
                 0.15 * likelihood
                 + structural
+                + 0.3 * turn_score
                 - movement
                 - 3 * repair
                 - 0.3 * readability

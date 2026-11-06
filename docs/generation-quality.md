@@ -111,3 +111,79 @@ Causes and changes:
 - **Combos.** The combo head's positive rate is about 1/8, so `logit > 0` almost never fires.
   `ml/combos.py` starts combos on bars (every bar when dense, every second bar otherwise),
   after rests of two beats or more and after spinners (`combos`, default on).
+
+## Third case (October 2026): off the beat, and only star jumps
+
+Three maps at a 6.2 ★ target (Jiyagi – Self Aware, S3RL – Dealer (VVVIP), t+pazolite –
+Revolt Against Me), model `316519ec…` (46 epochs, best 35). Compared with 14 human
+5.6–6.6 ★ training maps measured the same way:
+
+| | human (median) | Self Aware | Dealer | Revolt |
+|---|---|---|---|---|
+| BPM audio / map | – | 200 / 200.28 → 200 | 175 / 173.9 → **177.5** → 178.1 | 245 / **248.3**, **167.7**, 234–256 (15 red lines) |
+| objects ≤ 20 ms from an onset | 81 % | 62 % | 21 % | 41 % |
+| strongest onsets mapped | 76 % | 68 % | 28 % | 39 % |
+| turns sharper than 120° | 45 % | 90 % | 90 % | 88 % |
+| objects in same-direction sharp-turn chains | 6 % | 47 % | 64 % | 69 % |
+| longest chain | 4 | 35 | 25 | 29 |
+| spacing 1/2 / 1/1 | 132 / 128 px | 206 / 164 | 202 / 171 | 173 / 156 |
+| sliders of exactly 1/2 beat | 47 % | 94 % | 87 % | 90 % |
+| green lines | – | 188 | 267 | 250 |
+
+### Causes
+
+1. **Timing.** The learned path picked beat-head peaks, started a red line whenever two
+   frame-quantised (11.6 ms) intervals differed by 4 % and fitted each segment alone,
+   with no check against the audio. Dealer's grid wandered ±150 ms (half a beat) every
+   ~23 s; every object was snapped to it.
+2. **Rhythm evidence.** The onset head (precision 0.50 at recall 0.96, positive weight 15)
+   fires almost everywhere, so the gap head's "continue the pattern" decided the rhythm.
+3. **Star jumps.** Movement is relative to the previous move and was only trained on human
+   history; free-running, "same turn, same distance" is the attractor, at 144° a
+   pentagram. One spacing band for every gap ≥ 1/2 on a 512×384 field, a regression-mean
+   direction (left or right averages to "back") and greedy argmax selection kept it there.
+4. **Sliders.** Only out-of-band sliders were scaled to the requested velocity; in-band
+   ones kept their own (54–72 velocities, a green line per slider).
+
+### Changes
+
+- `ml/tempo_grid.py`: one constant tempo from the phasor coherence of all mel onsets (plus
+  the model's beat activation) over the whole song, octave by the model's tempo head,
+  rounded where the coherence allows (200.000, 175.000, 245.000 on the three songs; 9 of
+  12 constant-tempo human maps exact, 2 at the other octave without the model's tempo
+  head, 1 off by 0.5 %). New red lines only where
+  ≥ 4 windows of 16 beats lock clearly better to another tempo (dotted and triplet
+  passages on the grid do not count). Phase from the model's beats, else the mel onsets
+  plus the training data's convention; bar lines from accents and harmonic change.
+- `ml/song_plan.py`, `ml/song_analysis.py`, `POST /api/analyze`: sections on 4-bar phrases
+  (self-similarity novelty + loudness jumps), intensity, kind, style, repetitions and
+  accents, reviewed in the studio (metronome, offset/BPM nudges, boundaries, styles).
+- `ml/rhythm_guidance.py`: section density, accent skip cost / hit bonus, a cost for the
+  same gap over more than two bars (unless the onset is strong), repeated sections reuse
+  their rhythm, learned onsets × audio onset strength (`audio_onsets`).
+- `ml/movement_guidance.py`: a pattern planner per bar (back-and-forth, zigzag, triangle,
+  square, flow, linear, rarely a star) proposes the next head; same-direction sharp-turn
+  chains longer than two cost; the recent sharp-turn share is pulled to the requested
+  mix; spacing depends on the rhythm (1/1 > 1/2), accents and section style; border
+  mirroring instead of "jump to the centre".
+- `ml/candidate_selection.py`: direction weighted by the squared certainty, a floor on the
+  geometry likelihood, sampling among near-best candidates (`placement_temperature`).
+- Sliders take the section's velocity; `beatmaps.unify_slider_velocities` and the writer
+  emit a green line only where the velocity changes (9 instead of 267 in a test map).
+- `ml/map_audit.py`: the table above for every generated map (studio "Map-Check") and for
+  free validation; `POST /api/outputs/{id}/regenerate` and `/feedback` for per-section
+  rerolls and ratings (stored for later preference training).
+- Training: optional turn-class head (`turn_head`, new models), onset weight `**0.6`,
+  timing audit of every map (convention stored as `timing_convention_ms`, outliers
+  > 25 ms dropped), free-generation score for checkpoint selection, timing detection
+  checked in free validation.
+
+A stand-in model that always prefers the 144° continuation (so the effect of the guides
+can be measured without retraining) went from 98 % of objects in star chains (longest 43–56)
+to 4–5 % (longest 3) on all three songs; sharp turns from 99 % to 63 %. On Dealer the
+slider velocities went from 15 to 8 and the green lines to 9 after unification. Real models need a playtest; the audit shows the numbers in the studio.
+
+The measured offset convention (human red lines ~12 ms before the mel onsets, ~25 ms before
+a finer onset detector) is the training data's; whether exported OGG maps feel early in
+osu! has to be checked in game (lazer: hit error after one play). `export_offset_ms` shifts
+the exported audio if needed.

@@ -38,7 +38,8 @@ def test_user_style_overrides_calibration_and_profile():
 
 
 def test_spacing_collapse_costs_more_than_a_requested_jump():
-    guide = build_movement_guide(SETTINGS)
+    # Spacing only: the pattern planner's turn preference is tested separately.
+    guide = build_movement_guide({**SETTINGS, "pattern_planner": False})
     history = [circle(100, 100, 1000), circle(250, 100, 1150)]
     stacked = circle(262, 104, 1300)
     jump = circle(256 + 150, 180, 1300)
@@ -138,8 +139,57 @@ def test_calibration_widens_jumps_when_the_spacing_collapsed_despite_an_aim_heav
     step = calibration_step(
         settings, 6.4, 3.83, attributes, profile, (0.5, 12), {"jump_spacing": 19.4}
     )
-    assert step["tempo_bias"] <= 0 and step["calibration_style"]["jump_spacing"] > 170
+    assert step["tempo_bias"] == 0 and step["calibration_style"]["jump_spacing"] > 170
+    assert step.get("density_scale", 1.0) == 1.0
     fine = calibration_step(
         settings, 6.4, 3.83, attributes, profile, (0.5, 12), {"jump_spacing": 160.0}
     )
-    assert fine.get("calibration_style") is None and fine["tempo_bias"] > 0
+    # Aim-heavy and jumps as requested: the missing stars come from a denser rhythm,
+    # section by section, never from a song-wide tempo bias.
+    assert fine.get("calibration_style") is None and fine["tempo_bias"] == 0
+    assert fine["density_scale"] > 1
+
+
+def circles_along(points, start=1000, step=150, beat=300):
+    return [circle(x, y, start + step * index, beat) for index, (x, y) in enumerate(points)]
+
+
+def test_same_direction_sharp_turn_chains_cost_more_than_breaking_them():
+    guide = build_movement_guide({**SETTINGS, "pattern_planner": False})
+    # A pentagram: every move turns 144 degrees the same way.
+    points, position, heading = [], np.array([150.0, 200.0]), 0.0
+    for _ in range(6):
+        points.append(tuple(position))
+        position = position + 170 * np.array([math.cos(heading), math.sin(heading)])
+        heading += math.radians(144)
+    history = circles_along(points)
+    continued = position
+    turned = np.asarray(points[-1]) + 170 * np.array(
+        [math.cos(heading - math.radians(2 * 144) + math.radians(30)), math.sin(heading - math.radians(2 * 144) + math.radians(30))]
+    )
+    time = history[-1].time + 150
+    star = guide.turn_cost(circle(*continued, time), history)
+    other = guide.turn_cost(circle(*turned, time), history)
+    assert star > 1.0 > other
+
+
+def test_pattern_planner_proposes_its_turn_and_varies_between_bars():
+    guide = build_movement_guide(SETTINGS)
+    history = [circle(150, 192, 1000), circle(320, 192, 1150)]
+    names = set()
+    for bar in range(12):
+        time = 1300 + bar * 1200
+        planned = guide.planned_turn(time, 300, history)
+        assert planned is not None and -180 <= planned <= 180
+        names.add(guide.pattern[0])
+        # Every candidate of one object sees the same plan.
+        assert guide.planned_turn(time, 300, history) == planned
+    assert len(names) >= 3
+
+
+def test_rhythm_sets_the_spacing_a_whole_beat_moves_further_than_half_a_beat():
+    guide = build_movement_guide(SETTINGS)
+    previous = circle(100, 100, 1000)
+    half = guide.target_spacing(1150, previous, 300)
+    whole = guide.target_spacing(1300, previous, 300)
+    assert whole > half * 1.1

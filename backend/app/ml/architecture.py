@@ -52,6 +52,10 @@ class ModelConfig:
     # embedding and a rhythm-pattern head that chooses the next note on the beat grid.
     style_version: int = 1
     mapper_slots: int = 1
+    # Turn-class head: the signed turn to the next object as 12 angle bins + "no turn". The
+    # motion regression predicts a mean direction, which for "left or right" is "back"; a
+    # categorical turn keeps such choices apart. Off for models trained before it existed.
+    turn_head: bool = False
 
     def dictionary(self):
         return asdict(self)
@@ -74,4 +78,6 @@ class ModelConfig:
             raise ValueError("Invalid style configuration")
         if result.style_version == 1 and result.mapper_slots != 1:
             raise ValueError("Legacy models have no mapper embedding")
+        if type(result.turn_head) is not bool:
+            raise ValueError("Invalid turn head setting")
         return result

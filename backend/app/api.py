@@ -7,7 +7,15 @@ from fastapi.responses import FileResponse
 from . import difficulty, library, store
 from .config import AUDIO_EXTENSIONS, BACKEND, DATA, MAX_UPLOAD, READER
 from .jobs import Jobs
-from .schemas import GenerateRequest, ScanRequest, Selection, TrainRequest
+from .schemas import (
+    AnalyzeRequest,
+    FeedbackRequest,
+    GenerateRequest,
+    RegenerateRequest,
+    ScanRequest,
+    Selection,
+    TrainRequest,
+)
 from .ml.architecture import ARCHITECTURE, EVENT_SCHEMA
 from .ml.recovery import recover_training_runs
 from .map_catalog import matching_maps
@@ -20,12 +28,18 @@ STATE_SESSION = uuid4().hex
 
 
 def public(item):
-    return {
+    result = {
         key: value
         for key, value in item.items()
         if key not in ("map_path", "audio_path", "path", "preview_path", "excluded_maps")
         and not (key == "maps" and isinstance(value, list))
     }
+    # The song plan travels with the preview, not with every state poll.
+    if isinstance(result.get("settings"), dict) and "song_plan" in result["settings"]:
+        result["settings"] = {k: v for k, v in result["settings"].items() if k != "song_plan"}
+    if isinstance(result.get("quality"), dict) and "song_plan" in result["quality"]:
+        result["quality"] = {k: v for k, v in result["quality"].items() if k != "song_plan"}
+    return result
 
 
 @router.get("/state")
@@ -280,11 +294,77 @@ def train(request: TrainRequest):
 @router.post("/generate")
 def generate(request: GenerateRequest):
     from .ml.generation import generate as operation
+    from .ml.song_analysis import validated_plan
 
     with jobs.lock:
         store.get("model", request.model_id)
         store.get("audio", request.audio_id)
-        return jobs.submit("generation", request.title, lambda ctx: operation(request.dict(), ctx))
+        values = request.dict()
+        if values.get("song_plan"):
+            values["song_plan"] = validated_plan(values["song_plan"])
+        return jobs.submit("generation", request.title, lambda ctx: operation(values, ctx))
+
+
+@router.post("/analyze")
+def analyze(request: AnalyzeRequest):
+    """Song analysis (timing, sections, accents) for review before generating."""
+    from .ml.song_analysis import analyze as operation
+
+    with jobs.lock:
+        store.get("audio", request.audio_id)
+        if request.model_id:
+            store.get("model", request.model_id)
+        name = store.get("audio", request.audio_id).get("name") or "Song"
+        return jobs.submit("analysis", f"Analyse · {name}", lambda ctx: operation(request.dict(), ctx))
+
+
+@router.get("/analyses/{identifier}")
+def analysis(identifier: str):
+    return store.get("analysis", identifier)
+
+
+@router.get("/audio/{identifier}")
+def uploaded_audio(identifier: str):
+    item = store.get("audio", identifier)
+    return FileResponse(item["path"])
+
+
+@router.post("/outputs/{identifier}/regenerate")
+def regenerate(identifier: str, request: RegenerateRequest):
+    from .ml.generation import regenerate_section
+
+    with jobs.lock:
+        output = store.get("output", identifier)
+        if "preview_path" not in output:
+            raise HTTPException(404, "Nur generierte Maps lassen sich abschnittsweise neu erzeugen.")
+        store.get("model", output["settings"]["model_id"])
+        values = {**request.dict(), "output_id": identifier}
+        title = output.get("name", "Map").removesuffix(".osz")
+        return jobs.submit(
+            "generation", f"{title} · Abschnitt", lambda ctx: regenerate_section(values, ctx)
+        )
+
+
+@router.post("/outputs/{identifier}/feedback")
+def feedback(identifier: str, request: FeedbackRequest):
+    """A rating of one section of a generated map (kept for later preference training)."""
+    output = store.get("output", identifier)
+    return store.save(
+        "feedback",
+        {
+            "id": uuid4().hex,
+            "output_id": identifier,
+            "model_id": (output.get("settings") or {}).get("model_id"),
+            "action": "rating",
+            **request.dict(),
+            "created_at": store.now(),
+        },
+    )
+
+
+@router.get("/feedback")
+def feedback_export():
+    return {"feedback": store.all_records("feedback")}
 
 
 def remove_artifact(kind, identifier):

@@ -742,3 +742,205 @@
 .rc-actions .secondary {
   margin-top: 12px;
 }
+
+/* Song analysis (step 02) and section tools in the preview */
+.song-analysis .secondary {
+  width: 100%;
+  justify-content: center;
+}
+.timing-review {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+.timing-review b {
+  display: block;
+  font-size: 22px;
+  color: var(--color-ink);
+}
+.timing-review small {
+  color: var(--color-ink-4);
+}
+.confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-success);
+  background: var(--color-success-surface);
+}
+.confidence.low {
+  color: var(--color-warning);
+  background: var(--color-error-surface);
+}
+.timing-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 4px;
+  font-size: 12px;
+  color: var(--color-ink-4);
+}
+.timing-controls > span {
+  margin-left: 4px;
+}
+.chip {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chip:hover {
+  border-color: var(--color-accent-deep);
+  color: var(--color-ink);
+}
+.inline-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.inline-number input {
+  width: 92px;
+  padding: 4px 8px;
+}
+.link-button {
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+.plan-timeline {
+  position: relative;
+  display: flex;
+  height: 26px;
+  margin: 14px 0 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-paper-3);
+}
+.plan-timeline button {
+  flex: none;
+  height: 100%;
+  border: 0;
+  border-right: 1px solid var(--color-paper);
+  cursor: pointer;
+  padding: 0;
+}
+.plan-timeline button.current {
+  outline: 2px solid var(--color-ink);
+  outline-offset: -2px;
+}
+.plan-timeline i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-white);
+  pointer-events: none;
+}
+.plan-sections {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+.plan-sections li {
+  display: grid;
+  grid-template-columns: 74px 1fr 1fr 54px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--color-paper-3);
+  font-size: 12px;
+}
+.plan-sections.compact li {
+  grid-template-columns: 74px 1fr auto;
+}
+.plan-sections li.current {
+  background: var(--color-surface-3);
+}
+.plan-sections select {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.plan-time {
+  display: grid;
+  color: var(--color-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.plan-time small,
+.plan-sections .repeat {
+  color: var(--color-ink-5);
+}
+.intensity {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-surface-2);
+  overflow: hidden;
+}
+.intensity i {
+  display: block;
+  height: 100%;
+  background: var(--color-accent-soft);
+}
+.plan-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.plan-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.secondary.small {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+.audit-warnings li {
+  color: var(--color-warning);
+  font-size: 12px;
+}
+.audit-table {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--color-ink-2);
+}
+.audit-table th,
+.audit-table td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.audit-table th {
+  color: var(--color-ink-4);
+  font-weight: 500;
+}
+@media (max-width: 640px) {
+  .plan-sections li {
+    grid-template-columns: 64px 1fr 1fr;
+  }
+  .plan-sections .intensity,
+  .plan-sections .repeat {
+    display: none;
+  }
+}

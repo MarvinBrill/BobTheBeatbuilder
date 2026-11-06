@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import torch
 from copy import deepcopy
@@ -9,13 +10,18 @@ from .sequence_data import event_features, summary_features
 from .sequence_batches import event_queries, event_queries_v2
 from .rhythm_inference import encode_window, predict_rhythm, timing_map, timing_at, select_times
 from .playability import quality_report
-from .candidate_selection import choose_candidate, rank_candidates  # noqa: F401 (re-exported)
+from .candidate_selection import (  # noqa: F401 (choose_candidate is re-exported)
+    choose_candidate,
+    pick_candidate,
+    rank_candidates,
+)
 from .generation_trace import object_snapshot
 from .joint_planning import skip_option
 from .continuation_search import choose_continuation
 from .motif_memory import MotifMemory, analysis_spans, link_spans
 from .style import GAP_BEATS, REST, STREAM_GAP, allowed_gaps
-from .rhythm_guidance import build_guide, loudness_profile
+from .rhythm_guidance import build_guide, loudness_profile, sharpen_onsets
+from .song_plan import SongPlan, build_plan
 from .movement_guidance import build_movement_guide
 from .melodic_onsets import DEFAULT_WEIGHT as MELODIC_WEIGHT, combined_onsets
 from .spinners import drop_spinners, fill_spinners
@@ -68,7 +74,7 @@ def generate_objects(
     styled = getattr(model, "styled", False)
     summary = summary_features(mel)
     prediction = predict_rhythm(model, mel, summary, condition, selected_device, context, mapper)
-    timing, timing_source = timing_map(prediction, audio_path, settings)
+    timing, timing_source = timing_map(prediction, audio_path, settings, mel)
     if motif_memory is None and settings.get("motifs", False):
         motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
         if trace is not None:
@@ -374,8 +380,13 @@ def choose_next_time(
     def free(time):
         return blocked_from is None or not blocked_from < time < blocked_until
 
-    def cost(time, short=False):
-        return guide.cost(obj.time, time, run, short) if guide is not None else 0.0
+    def cost(time, short=False, index=None, evidence=0.0):
+        if guide is None:
+            return 0.0
+        return guide.cost(
+            obj.time, time, run, short, gap_class=index, evidence=evidence, release=release,
+            beat=beat,
+        )  # fmt: skip
 
     options = []
     for index, gap in enumerate(GAP_BEATS):
@@ -394,7 +405,7 @@ def choose_next_time(
                 log_probs[index]
                 + weight * np.log(evidence + 1e-3)
                 - bias * np.log2(gap)
-                - cost(time, short),
+                - cost(time, short, index, evidence),
                 time,
                 index,
             )
@@ -407,14 +418,14 @@ def choose_next_time(
             onset, active, max(release, blocked_until), end, timing, divisor, anywhere=True
         )
         if resume is not None:
-            options.append((log_probs[REST] - cost(resume), resume, REST))
+            options.append((log_probs[REST] - cost(resume, index=REST), resume, REST))
     else:
         pause = next_onset(onset, active, max(release, obj.time + 8.5 * beat), end, timing, divisor)
         if pause is not None and free(pause):
             options.append(
                 (
                     log_probs[REST] + weight * np.log(onset_evidence(onset, pause) + 1e-3)
-                    - cost(pause),
+                    - cost(pause, index=REST),
                     pause,
                     REST,
                 )
@@ -433,6 +444,19 @@ def choose_next_time(
     return time, index
 
 
+def resolve_plan(settings, mel, timing, timing_source, plan=None):
+    """The song plan for generation: given, from the request, or built from the audio."""
+    if plan is not None:
+        return plan
+    if settings.get("song_plan_object") is not None:
+        return settings["song_plan_object"]
+    if settings.get("song_plan"):
+        return SongPlan.from_dict(settings["song_plan"])
+    if not settings.get("plan_guidance", True):
+        return None
+    return build_plan(mel, FRAME_MS, timing, timing_source)
+
+
 def generate_objects_v2(
     model,
     mel,
@@ -446,12 +470,20 @@ def generate_objects_v2(
     trace=None,
     evaluation_range=None,
     motif_memory=None,
+    initial_objects=None,
+    hard_end=None,
+    plan=None,
 ):
     """Pattern-first generation for style-v2 models: place an object, then let the rhythm
-    head choose the beat-grid gap to the next one, combined with the audible onsets."""
+    head choose the beat-grid gap to the next one, combined with the audible onsets.
+
+    `initial_objects` are kept objects before the generated span (they become the decoder
+    history, e.g. when one section is regenerated); only the new objects are returned.
+    `hard_end` is the time of the next kept object: nothing new may reach it.
+    """
     summary = summary_features(mel)
     prediction = predict_rhythm(model, mel, summary, condition, selected_device, context, mapper)
-    timing, timing_source = timing_map(prediction, audio_path, settings)
+    timing, timing_source = timing_map(prediction, audio_path, settings, mel)
     # Training only ever saw beat confidence 1, 0.75 (slightly disturbed timing) or no timing;
     # the audio fallback's 0.35 put every musical-time query out of distribution.
     timing = [
@@ -460,35 +492,58 @@ def generate_objects_v2(
         else point
         for point in timing
     ]
+    plan = resolve_plan(settings, mel, timing, timing_source, plan)
     if motif_memory is None and settings.get("motifs", False):
         motif_memory = MotifMemory(link_spans(mel, analysis_spans(mel, timing)))
     active = np.max(mel, axis=1) > -0.7
     # The learned onsets mostly follow the drums; melodic (vocal/lead) note starts are added
-    # as extra evidence so the rhythm can follow the singer between the drum hits.
+    # as extra evidence so the rhythm can follow the singer between the drum hits. The
+    # result is sharpened with the audio's own onset strength (the onset head fires almost
+    # everywhere: precision 0.50 at recall 0.96 in October 2026).
     onset = combined_onsets(
         prediction[:, 0], mel, settings.get("melodic_onsets", MELODIC_WEIGHT)
     )
+    onset = sharpen_onsets(onset, mel, settings.get("audio_onsets", 0.4))
     duration = (len(mel) - 1) * FRAME_MS / 1000
     start, stop = evaluation_range if evaluation_range is not None else (0, duration * 1000)
     if not 0 <= start < stop <= duration * 1000 + FRAME_MS:
         raise ValueError("Invalid evaluation range")
     end = min(duration * 1000 - 100, stop)
+    horizon_cap = math.inf
+    if hard_end is not None:
+        # The next kept object: new heads stay a quarter beat before it, bodies end 35 ms before.
+        horizon_cap = float(hard_end)
+        end = min(end, hard_end - 0.25 * grid_point(timing, hard_end).beat_length)
     divisor = int(settings.get("divisor", 4))
-    first = next_onset(onset, active, start, end, timing, divisor, threshold=0.3, anywhere=True)
+    history = list(initial_objects or [])
+    begin = start
+    if history:
+        last = history[-1]
+        begin = max(start, last.time + last.duration + max(35.0, 0.24 * last.beat_length))
+    first = (
+        next_onset(onset, active, begin, end, timing, divisor, threshold=0.3, anywhere=True)
+        if begin < end
+        else None
+    )
     if first is None and evaluation_range is None:
         raise ValueError(
             "No playable notes predicted. Check the audio, model training and density."
         )
     rng = np.random.default_rng(settings["seed"])
-    objects, repairs, classes = [], [], []
-    times = [first] if first is not None else []
-    beats = [grid_point(timing, first).beat_length] if first is not None else []
+    # Placement sampling has its own generator so the model's sampling sequence is unchanged.
+    placement_rng = np.random.default_rng(int(settings["seed"]) + 104729)
+    placement_temperature = float(settings.get("placement_temperature", 0.25))
+    objects, repairs, classes = list(history), [], []
+    times = [obj.time for obj in history] + ([first] if first is not None else [])
+    beats = [grid_point(timing, time).beat_length for time in times]
     run, central_cache, generated_plan, truncated = 0, None, None, False
-    guide = build_guide(prediction, mel, settings)
+    guide = build_guide(prediction, mel, settings, plan)
+    if guide is not None:
+        guide.history.extend(obj.time for obj in history)
     loudness = loudness_profile(mel)
-    movement = build_movement_guide(settings, loudness, FRAME_MS)
+    movement = build_movement_guide(settings, loudness, FRAME_MS, plan)
     spans = []
-    if first is not None:
+    if first is not None and settings.get("spinners", True) is not False and not history:
         spans = [
             span
             for span in drop_spinners(loudness, active, timing, start, end, settings)
@@ -497,23 +552,25 @@ def generate_objects_v2(
     reserved = list(spans)
     if trace is not None and spans:
         trace.record("spinner_plan", spans=[list(span) for span in spans], source="loudness_jump")
+    if trace is not None and plan is not None:
+        trace.record("song_plan", plan=plan.to_dict())
     with torch.no_grad():
-        while times:
+        while first is not None and len(times) > len(objects):
             index, time = len(objects), times[-1]
             while spans and spans[0][2] <= time - 1e-6:
                 spans.pop(0)  # passed; `reserved` keeps every planned span
             upcoming = spans[0] if spans else None
             context.report(
                 0.35 + 0.55 * min(1.0, (time - start) / max(1.0, end - start)),
-                f"Rhythmus und Bewegung erzeugen · {index + 1} Objekte",
+                f"Rhythmus und Bewegung erzeugen · {index + 1 - len(history)} Objekte",
             )
             central = int(time / FRAME_MS) // CENTRAL_FRAMES * CENTRAL_FRAMES
             if central_cache != central:
-                memory, memory_valid, _, plan = encode_window(
+                memory, memory_valid, _, window_plan = encode_window(
                     model, mel, summary, condition, central, selected_device, mapper
                 )
                 if generated_plan is None:
-                    generated_plan = plan[0].detach().float().cpu().numpy()
+                    generated_plan = window_plan[0].detach().float().cpu().numpy()
                 central_cache = central
             previous, queries, valid = decoder_input_v2(
                 objects, times, beats, index, duration, selected_device, timing
@@ -523,11 +580,13 @@ def generate_objects_v2(
                 raise ValueError("Model generated non-finite object predictions")
             beat = beats[-1]
             # Sliders may not run into silence, the end of the audio or past eight beats.
-            horizon = min(time + 8 * beat, silence_after(active, time), end + 100) + 35
+            horizon = min(time + 8 * beat, silence_after(active, time), end + 100, horizon_cap) + 35
+            if horizon_cap < math.inf:
+                horizon = min(horizon, horizon_cap)
             if upcoming is not None and time < upcoming[0]:
                 # ...nor into a reserved spinner (keeping the lead time before it).
                 horizon = max(time + 36, min(horizon, upcoming[0] - spinner_lead(upcoming, beat) + 35))
-            chosen = rank_candidates(
+            ranked = rank_candidates(
                 model,
                 output,
                 time,
@@ -540,7 +599,8 @@ def generate_objects_v2(
                 trace,
                 motif_memory=motif_memory,
                 guide=movement,
-            )[0]
+            )
+            chosen = pick_candidate(ranked, placement_rng, placement_temperature)
             objects.append(chosen.obj)
             repairs.append(chosen.repair)
             if trace is not None:
@@ -572,18 +632,27 @@ def generate_objects_v2(
             )
             if choice is None:
                 break
-            if max_objects is not None and len(objects) >= max_objects:
+            if max_objects is not None and len(objects) - len(history) >= max_objects:
                 truncated = True
                 break
             following, gap = choice
+            if hard_end is not None and following > end + 1e-6:
+                break
             if trace is not None:
                 trace.record("rhythm_choice", time=time, next_time=following, gap_class=gap)
             run = run + 1 if gap != REST and GAP_BEATS[gap] <= STREAM_GAP else 0
             times.append(following)
             beats.append(grid_point(timing, following).beat_length)
             classes.append(gap)
-    spinners = placed_spinners(objects, reserved, active, timing, end, settings, truncated)
-    report = quality_report(objects, settings)
+            if guide is not None:
+                guide.classes.append(gap)
+    generated = objects[len(history):]
+    spinners = (
+        placed_spinners(generated, reserved, active, timing, end, settings, truncated)
+        if not history and hard_end is None
+        else []
+    )
+    report = quality_report(generated, settings)
     report.update(
         timing_source=timing_source,
         timing_sections=len(timing),
@@ -596,12 +665,15 @@ def generate_objects_v2(
         spinners=[[float(left), float(right)] for left, right in spinners],
         density_guidance=guide is not None,
         movement_guidance=movement is not None,
-        selected_count_before_limit=len(objects) + int(truncated),
+        plan_guidance=plan is not None and bool(settings.get("plan_guidance", True)),
+        selected_count_before_limit=len(generated) + int(truncated),
         truncated=truncated,
         skipped_interior_heads=0,
-        scope="section" if evaluation_range is not None else "song",
+        scope="section" if evaluation_range is not None or history else "song",
         motif_links=len(motif_memory.links) if motif_memory is not None else 0,
         phrase_plan=generated_plan.tolist() if generated_plan is not None else [],
         rhythm="learned-sequence",
     )
-    return objects, timing, report
+    if plan is not None:
+        report["song_plan"] = plan
+    return generated, timing, report

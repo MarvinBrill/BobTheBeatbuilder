@@ -69,22 +69,46 @@ def test_playability_preserves_triplets_bounds_and_time_to_next_object():
     assert np.hypot(circle.x - last.end_x, circle.y - last.end_y) < 220
 
 
-def test_learned_timing_recognizes_tempo_change_without_audio_fallback(monkeypatch):
-    times = np.concatenate([np.arange(500, 10500, 500), np.arange(10400, 18400, 400)])
-    prediction = np.zeros((1700, 4), np.float32)
+def clicks_mel(times, frames):
+    """Mel frames with a broadband click at each time (ms), silence-free background."""
+    mel = np.full((frames, 64), -0.6, np.float32)
+    for time in times:
+        frame = int(round(time / FRAME_MS))
+        if frame < frames:
+            mel[frame : frame + 3] = 0.6
+    return mel
+
+
+def test_detected_timing_finds_a_real_tempo_change_without_audio_fallback(monkeypatch):
+    times = np.concatenate([np.arange(500, 60000, 500), np.arange(60000, 120000, 400)])
+    frames = int(121000 / FRAME_MS)
+    prediction = np.zeros((frames, 4), np.float32)
     for time in times:
         frame = round(time / FRAME_MS)
         prediction[frame, 1] = 1
-        prediction[frame, 3] = np.log((500 if time < 10000 else 400) / 500)
+        prediction[frame, 3] = np.log((500 if time < 60000 else 400) / 500)
 
-    def unexpected(_):
-        raise AssertionError("Confident beat predictions should not use fallback")
+    def unexpected(*_):
+        raise AssertionError("Detected timing should not use the librosa fallback")
 
     monkeypatch.setattr("app.ml.rhythm_inference.tempo", unexpected)
-    timing, source = timing_map(prediction, "unused", SETTINGS)
-    assert source == "learned" and len(timing) == 2
-    assert timing[0].beat_length == pytest.approx(500, abs=15)
-    assert timing[1].beat_length == pytest.approx(400, abs=15)
+    timing, source = timing_map(prediction, "unused", SETTINGS, clicks_mel(times, frames))
+    assert source.startswith("detected") and len(timing) == 2
+    assert timing[0].beat_length == pytest.approx(500, abs=0.5)
+    assert timing[1].beat_length == pytest.approx(400, abs=0.5)
+    assert timing[1].time == pytest.approx(60000, abs=400 * 4)
+
+
+def test_constant_tempo_is_one_round_red_line_on_the_beat():
+    from app.ml.tempo_grid import detect_timing
+
+    beat = 60000 / 174.0
+    times = np.arange(137, 150000, beat)
+    frames = int(151000 / FRAME_MS)
+    result = detect_timing(clicks_mel(times, frames), FRAME_MS, convention_ms=0)
+    assert len(result.points) == 1 and 60000 / result.points[0].beat_length == pytest.approx(174.0)
+    shift = ((result.points[0].time - 137) % beat + beat / 2) % beat - beat / 2
+    assert abs(shift) < 20  # mel-flux latency is a few frames at most
 
 
 def test_manual_tempo_and_snapping_do_not_create_notes_in_silence():
@@ -150,3 +174,46 @@ def test_styled_generation_places_patterns_on_the_beat_grid(monkeypatch):
             assert obj.time + obj.duration + 35 <= objects[index + 1].time + 1e-6
             run = run + 1 if gap <= 130 else 0
             assert run + 1 <= 5
+
+
+def test_a_section_can_be_generated_again_between_kept_objects():
+    import torch
+    from app.beatmaps import HitObject
+    from app.ml import style
+    from app.ml.architecture import ModelConfig
+    from app.ml.phrase_model import PhraseMapper
+    from app.ml.sequence_generation import generate_objects_v2
+
+    class Quiet:
+        def check(self):
+            pass
+
+        def report(self, *args, **kwargs):
+            pass
+
+    torch.manual_seed(5)
+    model = PhraseMapper(
+        ModelConfig(
+            width=64, heads=2, audio_layers=1, global_layers=1, decoder_layers=1,
+            style_version=2, mapper_slots=2, turn_head=True,
+        )  # fmt: skip
+    ).eval()
+    mel = np.full((1400, 64), -0.2, np.float32)
+    values, mask = style.vector({"ar": 9, "cs": 4, "od": 8, "hp": 5, "tempo": 120, "stars": 5})
+    condition = torch.from_numpy(style.condition_input(values, mask))[None]
+    settings = {
+        **SETTINGS, "bpm": 120, "offset": 0, "divisor": 4, "seed": 9, "temperature": 0.8,
+        "candidates": 4, "slider_bias": 0.5,
+    }  # fmt: skip
+    before = [HitObject(100 + 60 * i, 150, 500.0 * (i + 1), end_x=100 + 60 * i, end_y=150, beat_length=500) for i in range(6)]
+    after = [HitObject(300, 200, 12000.0, end_x=300, end_y=200, beat_length=500)]
+    generated, timing, report = generate_objects_v2(
+        model, mel, "unused", settings, condition, torch.device("cpu"), Quiet(),
+        mapper=torch.tensor([1.0]), evaluation_range=(4000.0, 12000.0),
+        initial_objects=before, hard_end=after[0].time,
+    )  # fmt: skip
+    assert generated and report["scope"] == "section"
+    merged = before + generated + after
+    assert all(4000 <= obj.time < 12000 for obj in generated)
+    for left, right in zip(merged, merged[1:]):
+        assert left.time + left.duration + 35 <= right.time + 1e-6

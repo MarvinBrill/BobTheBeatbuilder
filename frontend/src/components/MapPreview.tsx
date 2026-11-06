@@ -14,13 +14,20 @@ import { PreviewObjects } from "./PreviewObjects";
 import { PreviewSoundPlayer } from "./PreviewSoundPlayer";
 import { PreviewVolume, usePreviewVolume } from "./PreviewVolume";
 import { FinishingLine, RankingCheckPanel } from "./RankingCheck";
+import { AuditPanel } from "./AuditPanel";
+import { SectionTools } from "./SectionTools";
 
 export function MapPreview({
   output,
   onError,
+  onJob,
+  busy = false,
 }: {
   output?: Output;
   onError: (message: string) => void;
+  /** Section regeneration started from the preview (tracked like a generation). */
+  onJob?: (job: unknown) => void;
+  busy?: boolean;
 }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -261,6 +268,9 @@ export function MapPreview({
                 learned: "gelernt",
                 reference: "vorgegeben",
                 "audio-fallback": "Audio-Schätzung",
+                "detected-model": "erkannt (Modell-Beats + Audio)",
+                "detected-audio": "erkannt (Audio)",
+                "approved-plan": "geprüfter Song-Plan",
               }[preview.quality.timing_source] || preview.quality.timing_source}
               {", "}
               {preview.quality.timing_sections} Tempoabschnitte,{" "}
@@ -329,6 +339,17 @@ export function MapPreview({
             <p className="fine-print preview-sound-status" role="status">
               {soundStatus}
             </p>
+          )}
+          {preview.quality?.audit && <AuditPanel audit={preview.quality.audit} />}
+          {preview.quality?.song_plan && onJob && (
+            <SectionTools
+              output={output}
+              plan={preview.quality.song_plan}
+              time={time * 1000}
+              busy={busy}
+              onJob={onJob}
+              onError={onError}
+            />
           )}
           {preview.quality?.ranking_check && (
             <RankingCheckPanel check={preview.quality.ranking_check} />

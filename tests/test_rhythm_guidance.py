@@ -177,15 +177,16 @@ def test_calibration_widens_jumps_for_an_aim_deficit_instead_of_streaming():
     attributes = {"aim_difficulty": 1.0, "speed_difficulty": 1.8}
     star_range = trained_star_range({"star_profiles": {"1.0": {}, "8.0": {}}})
     step = calibration_step(settings, 6.2, 3.0, attributes, profile, star_range)
-    assert step["tempo_bias"] <= 0
+    assert step["tempo_bias"] == 0 and step.get("density_scale", 1.0) == 1.0
     assert step["calibration_style"]["jump_spacing"] > 170
-    assert step["condition_stars"] <= 6.2 + 1.5
+    assert step["condition_stars"] <= 6.2 + 0.75
     speed = calibration_step(
         settings, 6.2, 5.0, {"aim_difficulty": 2.5, "speed_difficulty": 1.5}, profile, star_range
     )
-    assert 0 < speed["tempo_bias"] <= 1 and "calibration_style" not in speed
+    assert 1 < speed["density_scale"] <= 1.6 and "calibration_style" not in speed
+    assert speed["tempo_bias"] == 0
     harder = calibration_step(settings, 4.0, 6.0, attributes, profile, star_range)
-    assert harder["tempo_bias"] < 0 and harder["condition_stars"] < 6.2
+    assert harder["density_scale"] < 1 and harder["condition_stars"] < 6.2
 
 
 def test_free_validation_reports_stream_lock_in():
@@ -203,12 +204,12 @@ def test_calibration_respects_requested_aim_share_and_trained_range():
     attributes = {"aim_difficulty": 1.0, "speed_difficulty": 1.6}  # aim share 0.38
     speed_map = {"condition_stars": 5.0, "tempo_bias": 0.0, "style": {}, "aim_share": 0.4}
     step = calibration_step(speed_map, 5.0, 4.0, attributes, profile, (0.5, 12))
-    assert step["tempo_bias"] > 0 and "calibration_style" not in step
+    assert step["density_scale"] > 1 and "calibration_style" not in step
     low = {"condition_stars": 3.25, "tempo_bias": 0.0, "style": {}}
     assert calibration_step(low, 1.0, 2.0, attributes, profile, (3.25, 6.75))["condition_stars"] == 3.25
-    # Without a star profile there is no jump lever; the rhythm lever stays bounded.
+    # Without a star profile there is no jump lever; the density lever stays bounded.
     plain = calibration_step(low, 6.0, 3.0, attributes, None, (0.5, 12))
-    assert 0 < plain["tempo_bias"] <= 1
+    assert 1 < plain["density_scale"] <= 1.6
 
 
 def test_truncated_free_validation_compares_only_the_covered_span():

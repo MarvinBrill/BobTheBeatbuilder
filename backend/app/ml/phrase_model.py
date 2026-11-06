@@ -12,6 +12,7 @@ from .architecture import (
 from .attention import EncoderBlock, DecoderBlock
 from .phrase_plan import PLAN_FEATURES
 from .style import CONDITION_SIZE, GAP_CLASSES
+from .movement import TURN_CLASSES
 
 LEGACY_CONDITION = 8
 
@@ -61,6 +62,7 @@ class PhraseMapper(nn.Module):
         self.repeats = nn.Linear(width, 4)
         self.combo = nn.Linear(width, 1)
         self.motion = nn.Linear(width, MOTION_FEATURES)
+        self.turn = nn.Linear(width, TURN_CLASSES) if cfg.turn_head else None
         self.critic = nn.Sequential(
             nn.Linear(width + GEOMETRY_SIZE + MOTION_FEATURES, width),
             nn.GELU(),
@@ -129,7 +131,7 @@ class PhraseMapper(nn.Module):
         for block in self.decoder:
             value = block(value, memory, event_valid, memory_valid)
         hidden = self.event_norm(value)
-        return {
+        result = {
             "geometry": self.geometry(hidden),
             "kind": self.kind(hidden),
             "duration": self.duration(hidden),
@@ -138,6 +140,9 @@ class PhraseMapper(nn.Module):
             "motion": self.motion(hidden),
             "hidden": hidden,
         }
+        if self.turn is not None:
+            result["turn"] = self.turn(hidden)
+        return result
 
     def compatibility(self, hidden, geometry, motion):
         return self.critic(torch.cat([hidden, geometry, motion], dim=-1)).squeeze(-1)

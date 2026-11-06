@@ -64,6 +64,7 @@ export interface Job {
   metrics: Metric[];
   result?: {
     output_id?: string;
+    analysis_id?: string;
     imported?: number;
     skipped_other_modes?: number;
     error_count?: number;
@@ -121,6 +122,7 @@ export interface Model {
 export interface Output {
   id: string;
   name: string;
+  parent_id?: string | null;
   objects?: number;
   bpm?: number;
   stars?: number | null;
@@ -236,10 +238,69 @@ export interface Preview {
     patterns?: Record<string, number>;
     finishing?: FinishingSummary;
     ranking_check?: RankingCheck;
+    audit?: MapAudit;
+    song_plan?: SongPlan;
+    timing_detection?: TimingInfo;
+    regenerated?: { start_ms: number; end_ms: number; objects: number; seed: number };
   };
   objects: HitObject[];
   duration: number;
   bpm: number;
   offset: number;
   waveform: number[];
+}
+
+export type PlanStyle = "auto" | "calm" | "flow" | "jumps" | "streams" | "mixed";
+export type SectionKind =
+  | "intro"
+  | "verse"
+  | "build"
+  | "drop"
+  | "break"
+  | "outro"
+  | "silence";
+export interface PlanTimingPoint {
+  time: number;
+  beat_length: number;
+  meter?: number | null;
+  bar_origin?: number | null;
+  beat_confidence?: number;
+  meter_confidence?: number;
+}
+export interface PlanSection {
+  start_ms: number;
+  end_ms: number;
+  kind: SectionKind;
+  intensity: number;
+  style: PlanStyle;
+  repeat_of?: number | null;
+  bars?: number;
+  locked?: boolean;
+}
+export interface TimingInfo {
+  bpm?: number;
+  confidence?: number;
+  coherence?: number;
+  beat_lock?: number;
+  used_model_beats?: boolean;
+  constant?: boolean;
+  alternatives?: { bpm: number; coherence: number }[];
+  candidates?: { bpm: number; coherence: number }[];
+}
+/** Timing, sections and accents decided before any hit object (backend ml/song_plan.py). */
+export interface SongPlan {
+  version: number;
+  duration_ms: number;
+  timing_source: string;
+  timing_info: TimingInfo;
+  timing: PlanTimingPoint[];
+  sections: PlanSection[];
+  accents: number[];
+  accent_strength: number[];
+  waveform?: number[];
+}
+export interface MapAudit {
+  metrics: Record<string, number | null>;
+  reference: Record<string, number>;
+  warnings: string[];
 }

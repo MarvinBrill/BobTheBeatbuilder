@@ -1,7 +1,5 @@
 import numpy as np
 import torch
-from scipy.signal import find_peaks
-from scipy.ndimage import median_filter
 from .audio import FRAME_MS, tempo
 from .tempo_octave import model_tempo
 from .architecture import CENTRAL_FRAMES, AUDIO_MARGIN
@@ -44,10 +42,33 @@ def predict_rhythm(model, mel, summary, condition, selected_device, context, map
     return output
 
 
-def timing_map(prediction, audio_path, settings):
+def detect(prediction, mel, settings):
+    """Detected red lines for a song (see `tempo_grid.detect_timing`), or None."""
+    from .tempo_grid import DEFAULT_CONVENTION_MS, detect_timing
+
+    if mel is None:
+        return None
+    convention = settings.get("timing_convention_ms")
+    try:
+        return detect_timing(
+            mel,
+            FRAME_MS,
+            prediction,
+            prior_bpm=settings.get("tempo_prior"),
+            convention_ms=DEFAULT_CONVENTION_MS if convention is None else float(convention),
+        )
+    except ValueError:
+        return None
+
+
+def timing_map(prediction, audio_path, settings, mel=None):
+    """Red lines for generation: known timing first, then detection from the audio.
+
+    Returns (points, source). Detection details are available via `detect`.
+    """
     if settings.get("timing_override"):
-        # Timing that is already known: the first calibration round's detection, or the
-        # reference map's red lines in free validation. Never re-detected per round.
+        # Timing that is already known: the first calibration round's detection, the
+        # user-approved song plan, or the reference map's red lines in free validation.
         points = list(settings["timing_override"])
         if not points or not all(isinstance(point, TimingPoint) for point in points):
             raise ValueError("Invalid timing override")
@@ -77,39 +98,16 @@ def timing_map(prediction, audio_path, settings):
         beat = 60000 / settings["bpm"]
         offset = settings["offset"] - np.ceil(max(0, settings["offset"]) / beat) * beat
         return [TimingPoint(float(offset), float(beat))], "manual"
-    peaks, _ = find_peaks(
-        prediction[:, 1], height=0.55, prominence=0.15, distance=max(1, round(150 / FRAME_MS))
-    )
-    times = peaks * FRAME_MS
-    lengths = np.diff(times)
-    expected = 500 * np.exp(np.clip(prediction[peaks[:-1], 3], -2, 2))
-    good = (lengths >= 150) & (lengths <= 3000) & (np.abs(lengths - expected) / expected < 0.15)
-    if good.sum() >= 8 and good.mean() >= 0.7:
-        filtered = median_filter(lengths, size=5, mode="nearest")
-        first_index = int(np.flatnonzero(good)[0])
-        beat = float(filtered[first_index])
-        boundaries = [first_index]
-        for index in range(first_index + 1, len(filtered) - 3):
-            if good[index : index + 3].all() and abs(filtered[index] - beat) / beat > 0.04:
-                beat = float(filtered[index])
-                boundaries.append(index)
-        result = []
-        for section, start in enumerate(boundaries):
-            end = boundaries[section + 1] if section + 1 < len(boundaries) else len(times) - 1
-            anchor, beat = fit_beat_segment(times[start : end + 1], float(filtered[start]))
-            if not section:
-                anchor -= np.ceil(max(0, anchor) / beat) * beat
-            result.append(
-                TimingPoint(float(anchor), float(beat), beat_confidence=float(good.mean()))
-            )
-        return result, "learned"
+    result = detect(prediction, mel, settings)
+    if result is not None:
+        return result.points, result.source
     # Octave prior: typical tempo at the target stars, else the model's own tempo head.
     prior = settings.get("tempo_prior") or model_tempo(prediction)
     bpm, offset = tempo(audio_path, prior)
     beat = 60000 / bpm
     return [
         TimingPoint(
-            float(offset - np.ceil(max(0, offset) / beat) * beat), float(beat), beat_confidence=0.35
+            float(offset - np.ceil(max(0, offset) / beat) * beat), float(beat), beat_confidence=0.75
         )
     ], "audio-fallback"
 

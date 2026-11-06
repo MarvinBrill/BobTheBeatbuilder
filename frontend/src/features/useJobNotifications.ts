@@ -10,6 +10,7 @@ const kindLabels: Record<string, string> = {
   export: "Export",
   training: "Training",
   generation: "Generierung",
+  analysis: "Song-Analyse",
   "model-import": "Modell-Import",
 };
 
@@ -35,6 +36,7 @@ const homePage: Record<string, Page> = {
   export: "library",
   training: "training",
   generation: "studio",
+  analysis: "studio",
   "model-import": "models",
 };
 
@@ -113,6 +115,11 @@ export function useJobNotifications(
           generation: {
             title: "Beatmap fertig",
             message: `„${job.name}“ ist in der Vorschau geöffnet.`,
+            action: goTo("Ansehen", "studio"),
+          },
+          analysis: {
+            title: "Song-Analyse fertig",
+            message: "Timing und Abschnitte stehen im Studio zur Prüfung bereit.",
             action: goTo("Ansehen", "studio"),
           },
           "model-import": {

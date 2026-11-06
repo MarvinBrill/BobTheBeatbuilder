@@ -282,7 +282,7 @@ def write(
             edges, sets = edge_field(obj)
             if obj.curve:
                 controls = "|".join(f"{round(x)}:{round(y)}" for x, y in obj.curve[1:])
-                pixels = curve_length([[round(x), round(y)] for x, y in obj.curve])
+                pixels = slider_pixels(obj)
                 lines.append(
                     f"{x},{y},{time},{2 | combo},{sound},B|{controls},{obj.repeats},{pixels:.4f},{edges},{sets},0:0:0:0:"
                 )
@@ -302,6 +302,46 @@ def first(item):
     return item[0]
 
 
+def slider_curve_text(obj):
+    return "B|" + "|".join(f"{round(x)}:{round(y)}" for x, y in obj.curve[1:])
+
+
+def slider_pixels(obj):
+    """The pixel length written for a slider: its own `path_length`, else the curve length."""
+    if obj.path_length and obj.path_length > 0:
+        return float(obj.path_length)
+    return curve_length([[round(x), round(y)] for x, y in obj.curve])
+
+
+def unify_slider_velocities(objects, tolerance=0.04):
+    """Snap near-equal slider velocities to one value so the map needs few green lines.
+
+    Every generated slider used to get its own velocity (188-267 green lines per map, SV
+    0.74-1.29x), which players read as random slider speeds. Consecutive sliders within
+    `tolerance` of the current velocity take it over exactly; a clearly different one
+    starts a new velocity (rounded to 0.01x). The pixel length absorbs the difference
+    (osu! trims or extends the path), and the tail is recomputed the way osu! reads it.
+    """
+    current = None
+    for obj in objects:
+        if not obj.slider or not obj.curve or obj.duration <= 0:
+            continue
+        pixels = slider_pixels(obj)
+        beat = obj.beat_length
+        velocity = pixels * obj.repeats * beat / (140 * obj.duration)
+        if current is None or abs(velocity / current - 1) > tolerance:
+            current = round(velocity, 2)
+        current = min(10.0, max(0.1, current))
+        wanted = current * 140 * obj.duration / (obj.repeats * beat)
+        if abs(wanted - pixels) < 1e-6:
+            continue
+        obj.path_length = float(wanted)
+        if obj.repeats % 2:
+            tail = endpoint(obj.x, obj.y, slider_curve_text(obj), wanted)
+            obj.end_x, obj.end_y = float(tail[0]), float(tail[1])
+    return objects
+
+
 def state_at(states, time):
     """(volume, kiai) of the sound state active at `time`."""
     volume, kiai = (states[0][1], False) if states else (DEFAULT_VOLUME, False)
@@ -315,10 +355,10 @@ def state_at(states, time):
 def timing_lines(objects, timing, states=()):
     """Red lines, slider velocity lines and volume/kiai lines, one per kind and time.
 
-    osu! allows one red and one green line at the same time. A green line carries the
-    slider velocity of a slider starting there plus the active volume and kiai; a state
-    change without a slider gets a neutral green line (sliders always set their own
-    velocity at their head). The first red line never toggles kiai (Ranking Criteria):
+    osu! allows one red and one green line at the same time. A green line is written
+    where the slider velocity changes (a red line resets it to 1.0x) and carries the
+    active volume and kiai; a state change without a slider gets a green line that repeats
+    the active velocity. The first red line never toggles kiai (Ranking Criteria):
     a kiai starting there is set by a green line at the same time.
     """
     timing = [replace(point, time=round(point.time)) for point in red_points(timing)]
@@ -338,24 +378,51 @@ def timing_lines(objects, timing, states=()):
         line = f"{time:.3f},{point.beat_length:.8f},{point.meter or 4},2,0,{volume},1,{flag}"
         entries.append((time, 0, line))
     greens = {}
-    for obj in objects:
-        if not obj.slider or not obj.curve or obj.duration <= 0:
+    reds = {round(point.time) for point in timing}
+    # A green line only where the slider velocity changes; a red line resets it to 1.0x.
+    events = sorted(
+        [(round(point.time), 0, None) for point in timing]
+        + [
+            (round(obj.time), 1, obj)
+            for obj in objects
+            if obj.slider and obj.curve and obj.duration > 0
+        ],
+        key=lambda item: item[:2],
+    )
+    active, changes = 1.0, [(-math.inf, 1.0)]
+    for time, kind, obj in events:
+        if kind == 0:
+            active = 1.0
+            changes.append((time, active))
             continue
-        length = curve_length([[round(x), round(y)] for x, y in obj.curve])
-        point = timing_at(timing, round(obj.time))
+        point = timing_at(timing, time)
         beat = point.beat_length
-        velocity = length * obj.repeats * beat / (140 * obj.duration)
+        velocity = slider_pixels(obj) * obj.repeats * beat / (140 * obj.duration)
         if not 0.1 <= velocity <= 10:
             raise ValueError("Generated slider velocity is outside osu! limits")
-        greens[round(obj.time)] = (velocity, point.meter or 4)
-    reds = {round(point.time) for point in timing}
+        if abs(velocity - active) > 1e-6 * max(1.0, velocity) or time in reds:
+            if time in reds and abs(velocity - 1.0) <= 1e-6:
+                continue  # the red line at this time already sets 1.0x
+            greens[time] = (velocity, point.meter or 4)
+            active = velocity
+            changes.append((time, active))
+
+    def velocity_at(time):
+        value = 1.0
+        for start, velocity in changes:
+            if start > time:
+                break
+            value = velocity
+        return value
+
     previous = None
     for time, volume, kiai in states:
         state = (volume, bool(kiai))
         # A red line already carries the state, except kiai on the very first red line.
         needs_green = time not in reds or (time == first_red and kiai)
         if state != previous and needs_green and time not in greens:
-            greens[time] = (None, timing_at(timing, time).meter or 4)
+            # Neutral for sliders: it repeats the velocity that is active at this time.
+            greens[time] = (velocity_at(time), timing_at(timing, time).meter or 4)
         previous = state
     for time, (velocity, meter) in greens.items():
         volume, kiai = state_at(states, time)

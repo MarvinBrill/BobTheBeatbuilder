@@ -22,6 +22,21 @@ export function RolloutQuality({ suite }: { suite: RolloutSuite }) {
           Spielspaß-Score.
         </p>
       )}
+      {suite.songs > 0 && suite.means.star_chain_share !== undefined && (
+        <p>
+          Map-Check: {(suite.means.star_chain_share * 100).toFixed(0)} % in Stern-Ketten
+          (Menschen ~7 %),{" "}
+          {suite.means.onset_hit_share !== undefined &&
+            `${(suite.means.onset_hit_share * 100).toFixed(0)} % auf Onsets (Menschen ~70 %), `}
+          {suite.means.sharp_share !== undefined &&
+            `${(suite.means.sharp_share * 100).toFixed(0)} % scharfe Wechsel (Menschen ~45 %).`}
+          {suite.means.timing_bpm_error !== undefined &&
+            ` Timing-Erkennung ohne Referenz: ${(suite.means.timing_bpm_error * 100).toFixed(2)} % BPM-Fehler` +
+              (suite.means.timing_offset_ms !== undefined
+                ? `, ${suite.means.timing_offset_ms.toFixed(0)} ms Phasenfehler.`
+                : ".")}
+        </p>
+      )}
       {suite.failures.map((failure, index) => (
         <p key={`${failure.map_id}-${index}`}>
           Prüfabschnitt {failure.map_id}: {failure.reason}
